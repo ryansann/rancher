@@ -9,9 +9,9 @@ replace (
 	github.com/knative/pkg => github.com/rancher/pkg v0.0.0-20190514055449-b30ab9de040e
 	github.com/matryer/moq => github.com/rancher/moq v0.0.0-20190404221404-ee5226d43009
 	github.com/prometheus/client_golang => github.com/prometheus/client_golang v0.9.3
-
 	github.com/rancher/rancher/pkg/auth => ./pkg/auth
-
+	github.com/rancher/rke => github.com/ryansann/rke v1.1.0-rc9.0.20200601194800-79c990b629c9
+	github.com/rancher/types => github.com/ryansann/types v0.0.0-20200601203535-4cb93e642cf6
 	k8s.io/api => k8s.io/api v0.18.0
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.18.0
 	k8s.io/apimachinery => k8s.io/apimachinery v0.18.0
@@ -73,7 +73,7 @@ require (
 	github.com/rancher/kontainer-engine v0.0.4-dev.0.20200508010131-226462dc5558
 	github.com/rancher/lasso v0.0.0-20200515155337-a34e1e26ad91
 	github.com/rancher/machine v0.15.0-rancher25
-	github.com/rancher/norman v0.0.0-20200517050325-f53cae161640
+	github.com/rancher/norman v0.0.0-20200520181341-ab75acb55410
 	github.com/rancher/rancher/pkg/auth v0.0.0
 	github.com/rancher/rdns-server v0.0.0-20180802070304-bf662911db6a
 	github.com/rancher/remotedialer v0.2.6-0.20200403185207-c326f2656545

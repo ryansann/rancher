@@ -53,7 +53,14 @@ var (
 )
 
 func configMapTypes(schemas *types.Schemas) *types.Schemas {
-	return schemas.MustImport(&Version, v1.ConfigMap{}, projectOverride{})
+	return schemas.MustImportAndCustomize(&Version, v1.ConfigMap{}, func(schema *types.Schema) {
+		schema.MustCustomizeField("name", func(field types.Field) types.Field {
+			field.Type = "hostname"
+			field.Nullable = false
+			field.Required = true
+			return field
+		})
+	}, projectOverride{})
 }
 
 type DeploymentConfig struct {
@@ -128,7 +135,7 @@ func workloadTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -187,7 +194,7 @@ func statefulSetTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -226,7 +233,7 @@ func replicaSetTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -267,7 +274,7 @@ func replicationControllerTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -316,7 +323,7 @@ func daemonSetTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -353,7 +360,7 @@ func jobTypes(schemas *types.Schemas) *types.Schemas {
 		MustImportAndCustomize(&Version, batchv1.Job{}, func(schema *types.Schema) {
 			schema.BaseType = "workload"
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -425,9 +432,13 @@ func cronJobTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
+				// CronJob name must not exceed 52 characters, see: https://github.com/kubernetes/kubernetes/blob/v1.18.3/pkg/apis/batch/validation/validation.go#L180 for upstream validation logic
+				var nameMaxLen int64
+				nameMaxLen = 52
+				field.MaxLength = &nameMaxLen
 				return field
 			})
 		}, projectOverride{}, struct {
@@ -490,7 +501,7 @@ func deploymentTypes(schemas *types.Schemas) *types.Schemas {
 				"redeploy": {},
 			}
 			schema.MustCustomizeField("name", func(field types.Field) types.Field {
-				field.Type = "dnsLabelRestricted"
+				field.Type = "hostname"
 				field.Nullable = false
 				field.Required = true
 				return field
@@ -588,7 +599,14 @@ func podTypes(schemas *types.Schemas) *types.Schemas {
 			Scheduling *Scheduling
 			NodeName   string `norman:"type=reference[/v3/schemas/node]"`
 		}{}).
-		MustImport(&Version, v1.Pod{}, projectOverride{}, struct {
+		MustImportAndCustomize(&Version, v1.Pod{}, func(schema *types.Schema) {
+			schema.MustCustomizeField("name", func(field types.Field) types.Field {
+				field.Type = "hostname"
+				field.Nullable = false
+				field.Required = true
+				return field
+			})
+		}, projectOverride{}, struct {
 			Description     string `json:"description"`
 			WorkloadID      string `norman:"type=reference[workload]"`
 			PublicEndpoints string `json:"publicEndpoints" norman:"type=array[publicEndpoint],nocreate,noupdate"`
@@ -671,7 +689,7 @@ func addServiceOrDNSRecord(dns bool) types.SchemasInitFunc {
 					return f
 				})
 				schema.MustCustomizeField("name", func(field types.Field) types.Field {
-					field.Type = "dnsLabelRestricted"
+					field.Type = "dnsLabel"
 					field.Nullable = false
 					field.Required = true
 					return field
@@ -775,7 +793,14 @@ func volumeTypes(schemas *types.Schemas) *types.Schemas {
 			VolumeName       string   `json:"volumeName,omitempty" norman:"type=reference[/v3/cluster/persistentVolume]"`
 			StorageClassName *string  `json:"storageClassName,omitempty" norman:"type=reference[/v3/cluster/storageClass]"`
 		}{}).
-		MustImport(&Version, v1.PersistentVolumeClaim{}, projectOverride{})
+		MustImportAndCustomize(&Version, v1.PersistentVolumeClaim{}, func(schema *types.Schema) {
+			schema.MustCustomizeField("name", func(field types.Field) types.Field {
+				field.Type = "hostname"
+				field.Nullable = false
+				field.Required = true
+				return field
+			})
+		}, projectOverride{})
 }
 
 func appTypes(schema *types.Schemas) *types.Schemas {

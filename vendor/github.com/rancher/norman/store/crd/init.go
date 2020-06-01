@@ -8,6 +8,7 @@ import (
 
 	"github.com/rancher/norman/store/proxy"
 	"github.com/rancher/norman/types"
+	"github.com/rancher/norman/types/convert"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
@@ -180,7 +181,7 @@ func (f *Factory) createCRD(ctx context.Context, apiClient clientset.Interface, 
 			Version: schema.Version.Version,
 			Names: apiext.CustomResourceDefinitionNames{
 				Plural: plural,
-				Kind:   schema.CodeName,
+				Kind:   convert.Capitalize(schema.ID),
 			},
 		},
 	}

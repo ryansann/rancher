@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -131,6 +132,9 @@ func (p *prtbLifecycle) reconcileSubject(binding *v3.ProjectRoleTemplateBinding)
 // - if the subject was granted owner permissions for the project, ensure they can create/update/delete the project
 // - if the subject was granted privileges to mgmt plane resources that are scoped to the project, enforce those rules in the project's mgmt plane namespace
 func (p *prtbLifecycle) reconcileBindings(binding *v3.ProjectRoleTemplateBinding) error {
+	prtbBytes, _ := json.MarshalIndent(binding, "", "  ")
+	logrus.Debugf("%s: %s", binding.Name, string(prtbBytes))
+
 	if binding.UserName == "" && binding.GroupPrincipalName == "" && binding.GroupName == "" {
 		return nil
 	}
@@ -161,6 +165,7 @@ func (p *prtbLifecycle) reconcileBindings(binding *v3.ProjectRoleTemplateBinding
 	roleName := strings.ToLower(fmt.Sprintf("%v-clustermember", clusterName))
 	// if roletemplate is not builtin, check if it's inherited/cloned
 	isOwnerRole, err := p.mgr.checkReferencedRoles(binding.RoleTemplateName)
+	logrus.Debugf("isOwnerRole: %v, err: %v", isOwnerRole, err)
 	if err != nil {
 		return err
 	}
@@ -170,6 +175,7 @@ func (p *prtbLifecycle) reconcileBindings(binding *v3.ProjectRoleTemplateBinding
 	} else {
 		projectRoleName = strings.ToLower(fmt.Sprintf("%v-projectmember", projectName))
 	}
+	logrus.Debugf("projectRoleName: %s", projectRoleName)
 
 	subject, err := pkgrbac.BuildSubjectFromRTB(binding)
 	if err != nil {

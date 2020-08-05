@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 
@@ -758,6 +759,9 @@ func (m *manager) checkReferencedRoles(roleTemplateName string) (bool, error) {
 		return false, err
 	}
 
+	rtbytes, _ := json.MarshalIndent(roleTemplate, "", "  ")
+	logrus.Debugf("%s: %s", roleTemplateName, string(rtbytes))
+
 	// upon upgrades, crtb/prtbs are reconciled before roletemplates.
 	// So these roles won't have the "own" verb at the time of this check added 2.4.6 onwards
 	if roleTemplate.Builtin && roleTemplate.Context == "project" && roleTemplateName == "project-owner" {
@@ -774,6 +778,7 @@ func (m *manager) checkReferencedRoles(roleTemplateName string) (bool, error) {
 			}
 		}
 	}
+
 	isOwnerRole := false
 	if len(roleTemplate.RoleTemplateNames) > 0 {
 		// get referenced roletemplate

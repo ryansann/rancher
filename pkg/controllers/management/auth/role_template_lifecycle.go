@@ -3,6 +3,8 @@ package auth
 import (
 	"fmt"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/rancher/rancher/pkg/clustermanager"
 	v3 "github.com/rancher/types/apis/management.cattle.io/v3"
 	"github.com/rancher/types/config"
@@ -61,6 +63,8 @@ func (rtl *roleTemplateLifecycle) Updated(obj *v3.RoleTemplate) (runtime.Object,
 
 // enqueueRtbs enqueues crtbs and prtbs associated to the role template.
 func (rtl *roleTemplateLifecycle) enqueueRtbs(obj *v3.RoleTemplate) (runtime.Object, error) {
+	logrus.Debugf("updated roleTemplate: %s", obj.Name)
+
 	if err := rtl.enqueuePrtbs(obj); err != nil {
 		return nil, err
 	}
@@ -69,7 +73,7 @@ func (rtl *roleTemplateLifecycle) enqueueRtbs(obj *v3.RoleTemplate) (runtime.Obj
 		return nil, err
 	}
 
-	return nil, nil
+	return obj, nil
 }
 
 func (rtl *roleTemplateLifecycle) Remove(obj *v3.RoleTemplate) (runtime.Object, error) {
@@ -126,6 +130,7 @@ func (rtl *roleTemplateLifecycle) enqueuePrtbs(updatedRT *v3.RoleTemplate) error
 	}
 	for _, x := range prtbs {
 		if prtb, ok := x.(*v3.ProjectRoleTemplateBinding); ok {
+			logrus.Debugf("enqueueing prtb: %s", prtb.Name)
 			rtl.prtbClient.Controller().Enqueue(prtb.Namespace, prtb.Name)
 		}
 	}

@@ -51,6 +51,7 @@ type prtbLifecycle struct {
 }
 
 func (p *prtbLifecycle) Create(obj *v3.ProjectRoleTemplateBinding) (runtime.Object, error) {
+	logrus.Debugf("created prtb: %", obj.Name)
 	if obj.ServiceAccount != "" {
 		return obj, nil
 	}
@@ -63,6 +64,7 @@ func (p *prtbLifecycle) Create(obj *v3.ProjectRoleTemplateBinding) (runtime.Obje
 }
 
 func (p *prtbLifecycle) Updated(obj *v3.ProjectRoleTemplateBinding) (runtime.Object, error) {
+	logrus.Debugf("updated prtb: %", obj.Name)
 	if obj.ServiceAccount != "" {
 		return obj, nil
 	}
@@ -182,6 +184,7 @@ func (p *prtbLifecycle) reconcileBindings(binding *v3.ProjectRoleTemplateBinding
 		return err
 	}
 	if err := p.mgr.ensureProjectMembershipBinding(projectRoleName, string(binding.UID), clusterName, proj, isOwnerRole, subject); err != nil {
+		logrus.Errorf("could not ensure project membership binding: %v", err)
 		return err
 	}
 	if err := p.mgr.ensureClusterMembershipBinding(roleName, string(binding.UID), cluster, false, subject); err != nil {

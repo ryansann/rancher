@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/rbac/v1"
 	meta2 "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,7 @@ func indexByMembershipBindingOwner(obj interface{}) ([]string, error) {
 	if obj, ok := obj.(runtime.Object); ok {
 		meta, err := meta2.Accessor(obj)
 		if err != nil {
+			logrus.Errorf("indexByMembershipBindingOwner: %v", err)
 			return nil, err
 		}
 
@@ -48,6 +50,8 @@ func indexByMembershipBindingOwner(obj interface{}) ([]string, error) {
 				return []string{meta.GetNamespace() + "/" + k}, nil
 			}
 		}
+	} else {
+		logrus.Debugf("indexByMembershipBindingOwner: not ok, obj is not a runtime.Object")
 	}
 
 	return nil, nil

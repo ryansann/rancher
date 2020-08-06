@@ -43,6 +43,17 @@ func newRTBLifecycles(management *config.ManagementContext) (*prtbLifecycle, *cr
 		membershipBindingOwnerIndex: indexByMembershipBindingOwner,
 	}
 	rbInformer.AddIndexers(rbIndexers)
+	rbInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			logrus.Debugf("added: %+v", obj)
+		},
+		UpdateFunc: func(old interface{}, new interface{}) {
+			logrus.Debugf("old: %+v, new: %+v", old, new)
+		},
+		DeleteFunc: func(obj interface{}) {
+			logrus.Debugf("deleted: %+v", obj)
+		},
+	})
 
 	prtb := &prtbLifecycle{
 		mgr: &manager{
@@ -176,12 +187,14 @@ func (m *manager) ensureClusterMembershipBinding(roleName, rtbUID string, cluste
 // that gives the subject access to the the project/cluster custom resource itself
 func (m *manager) ensureProjectMembershipBinding(roleName, rtbUID, namespace string, project *v3.Project, makeOwner bool, subject v1.Subject) error {
 	if err := m.createProjectMembershipRole(roleName, namespace, project, makeOwner); err != nil {
+		logrus.Errorf("could not create project membership role: %v", err)
 		return err
 	}
 
 	key := rbRoleSubjectKey(roleName, subject)
 	rbs, err := m.rbIndexer.ByIndex(membershipBindingOwnerIndex, namespace+"/"+rtbUID)
 	if err != nil {
+		logrus.Errorf("could not get rbs: %v", err)
 		return err
 	}
 	var rb *v1.RoleBinding
@@ -198,6 +211,7 @@ func (m *manager) ensureProjectMembershipBinding(roleName, rtbUID, namespace str
 	}
 
 	if err := m.reconcileProjectMembershipBindingForDelete(namespace, roleName, rtbUID); err != nil {
+		logrus.Errorf("could not reconcile project membership: %v", err)
 		return err
 	}
 
@@ -207,6 +221,7 @@ func (m *manager) ensureProjectMembershipBinding(roleName, rtbUID, namespace str
 
 	objs, err := m.rbIndexer.ByIndex(rbByRoleAndSubjectIndex, key)
 	if err != nil {
+		logrus.Errorf("could not get rbs second time: %v", err)
 		return err
 	}
 
@@ -225,6 +240,9 @@ func (m *manager) ensureProjectMembershipBinding(roleName, rtbUID, namespace str
 				Name: roleName,
 			},
 		})
+		if err != nil {
+			logrus.Errorf("could not create rolebinding: %v", err)
+		}
 		return err
 	}
 
@@ -242,6 +260,9 @@ func (m *manager) ensureProjectMembershipBinding(roleName, rtbUID, namespace str
 	rb.Labels[rtbUID] = membershipBindingOwner
 	logrus.Infof("[%v] Updating roleBinding %v for project membership in project %v for subject %v", m.controller, rb.Name, project.Name, subject.Name)
 	_, err = m.mgmt.RBAC.RoleBindings(namespace).Update(rb)
+	if err != nil {
+		logrus.Errorf("could not update rolebindings: %v", err)
+	}
 	return err
 }
 
@@ -334,9 +355,35 @@ func (m *manager) reconcileMembershipBindingForDelete(namespace, roleToKeep, rtb
 		return err
 	}
 
+	k := namespace + "/" + rtbUID
+	keys, err := m.rbIndexer.IndexKeys(membershipBindingOwnerIndex, k)
+	if err != nil {
+		logrus.Errorf("error getting keys: %v", err)
+	}
+	logrus.Debugf("keys: %+v", keys)
+
+	for _, k := range keys {
+		i, e, err := m.rbIndexer.GetByKey(k)
+		if err != nil {
+			logrus.Errorf("error getting item for key: %v, %v", k, err)
+		}
+		if e {
+			logrus.Debugf("key: %v, item: %+v", k, i)
+		} else {
+			logrus.Debugf("no item exists for key: %v", k)
+		}
+	}
+
+	logrus.Debugf("roleBindings: %+v", roleBindings)
+
 	for _, rb := range roleBindings {
+		if rb == nil {
+			continue
+		}
+
 		objMeta, err := meta.Accessor(rb)
 		if err != nil {
+			logrus.Debugf("rb: %+v", rb)
 			return err
 		}
 

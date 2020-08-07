@@ -128,6 +128,7 @@ func (rtl *roleTemplateLifecycle) enqueuePrtbs(updatedRT *v3.RoleTemplate) error
 	if err != nil {
 		return err
 	}
+	logrus.Debugf("crtbs: %+v", prtbs)
 	for _, x := range prtbs {
 		if prtb, ok := x.(*v3.ProjectRoleTemplateBinding); ok {
 			logrus.Debugf("enqueueing prtb: %s", prtb.Name)
@@ -143,6 +144,7 @@ func (rtl *roleTemplateLifecycle) enqueueCrtbs(updatedRT *v3.RoleTemplate) error
 	if err != nil {
 		return err
 	}
+	logrus.Debugf("crtbs: %+v", crtbs)
 	for _, x := range crtbs {
 		if crtb, ok := x.(*v3.ClusterRoleTemplateBinding); ok {
 			rtl.crtbClient.Controller().Enqueue(crtb.Namespace, crtb.Name)

@@ -377,17 +377,18 @@ func (m *manager) reconcileMembershipBindingForDelete(namespace, roleToKeep, rtb
 	logrus.Debugf("roleBindings: %+v", roleBindings)
 
 	for _, rb := range roleBindings {
-		if rb == nil {
+		rbb, ok := rb.(*v1.RoleBinding)
+		if !ok {
+			logrus.Debugf("rb: %v, not a *v1.RoleBinding", rb)
 			continue
 		}
 
-		objMeta, err := meta.Accessor(rb)
+		objMeta, err := meta.Accessor(rbb)
 		if err != nil {
-			logrus.Debugf("rb: %+v", rb)
 			return err
 		}
 
-		roleName := convert(rb)
+		roleName := convert(rbb)
 		if roleName == roleToKeep {
 			continue
 		}

@@ -54,7 +54,7 @@ func indexByMembershipBindingOwner(obj interface{}) ([]string, error) {
 		logrus.Debugf("indexByMembershipBindingOwner: not ok, obj is not a runtime.Object")
 	}
 
-	return nil, nil
+	return []string{}, nil
 }
 
 func rbByRoleAndSubject(obj interface{}) ([]string, error) {

@@ -21,14 +21,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/clock"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog"
 	"k8s.io/utils/buffer"
+
+	"k8s.io/klog"
 )
 
 // SharedInformer provides eventually consistent linkage of its
@@ -498,7 +498,6 @@ func (s *sharedIndexInformer) HandleDeltas(obj interface{}) error {
 
 	// from oldest to newest
 	for _, d := range obj.(Deltas) {
-		logrus.Debugf("delta object: %+v", d.Object)
 		switch d.Type {
 		case Sync, Replaced, Added, Updated:
 			s.cacheMutationDetector.AddObject(d.Object)

@@ -289,9 +289,7 @@ func (c *threadSafeMap) updateIndices(oldObj interface{}, newObj interface{}, ke
 // deleteFromIndices removes the object from each of the managed indexes
 // it is intended to be called from a function that already has a lock on the cache
 func (c *threadSafeMap) deleteFromIndices(obj interface{}, key string) {
-	fmt.Printf("deleteFromIndicies: obj: %+v, key: %s", obj, key)
 	for name, indexFunc := range c.indexers {
-		fmt.Printf("deleteFromIndicies: name: %s\n", name)
 		indexValues, err := indexFunc(obj)
 		if err != nil {
 			panic(fmt.Errorf("unable to calculate an index entry for key %q on index %q: %v", key, name, err))

@@ -29,7 +29,7 @@ const MetricsQueueEnv = "NORMAN_QUEUE_METRICS"
 const MetricsReflectorEnv = "NORMAN_REFLECTOR_METRICS"
 
 var (
-	resyncPeriod = 30 * time.Second
+	resyncPeriod = 2 * time.Hour
 )
 
 // Override the metrics providers

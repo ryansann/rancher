@@ -51,6 +51,19 @@ func newRTBLifecycles(management *config.ManagementContext) (*prtbLifecycle, *cr
 			logrus.Debugf("old: %+v, new: %+v", old, new)
 		},
 		DeleteFunc: func(obj interface{}) {
+			sErr := rbInformer.GetStore().Resync()
+			if sErr != nil {
+				logrus.Errorf("could not resync store: %v", sErr)
+			}
+
+			iErr := rbInformer.GetIndexer().Resync()
+			if iErr != nil {
+				logrus.Errorf("could not resync indexer: %v", iErr)
+			}
+
+			funcVals := rbInformer.GetIndexer().ListIndexFuncValues(membershipBindingOwnerIndex)
+			logrus.Debugf("funcVals: %v", funcVals)
+
 			logrus.Debugf("deleted: %+v", obj)
 		},
 	})

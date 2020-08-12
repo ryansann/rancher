@@ -18,8 +18,10 @@ package cache
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
@@ -89,6 +91,7 @@ func (c *threadSafeMap) Update(key string, obj interface{}) {
 func (c *threadSafeMap) Delete(key string) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	logrus.Tracef("threadSafeMap.Delete key: %s", key)
 	if obj, exists := c.items[key]; exists {
 		c.deleteFromIndices(obj, key)
 		delete(c.items, key)
@@ -289,19 +292,33 @@ func (c *threadSafeMap) updateIndices(oldObj interface{}, newObj interface{}, ke
 // deleteFromIndices removes the object from each of the managed indexes
 // it is intended to be called from a function that already has a lock on the cache
 func (c *threadSafeMap) deleteFromIndices(obj interface{}, key string) {
+	var shouldLog bool
+	if strings.Contains(key, "rolebinding") {
+		shouldLog = true
+	}
 	for name, indexFunc := range c.indexers {
+		if shouldLog {
+			logrus.Debugf("obj: %+v", obj)
+		}
 		indexValues, err := indexFunc(obj)
 		if err != nil {
 			panic(fmt.Errorf("unable to calculate an index entry for key %q on index %q: %v", key, name, err))
 		}
 
 		index := c.indices[name]
+		if shouldLog {
+			logrus.Tracef("index: %s, key: %s, indexValues: %v, contents: %v", name, key, indexValues, index)
+		}
 		if index == nil {
 			continue
 		}
 		for _, indexValue := range indexValues {
 			set := index[indexValue]
 			if set != nil {
+				if shouldLog {
+					logrus.Tracef("set: %v", set)
+				}
+
 				set.Delete(key)
 
 				// If we don't delete the set when zero, indices with high cardinality

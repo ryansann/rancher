@@ -47,7 +47,9 @@ func indexByMembershipBindingOwner(obj interface{}) ([]string, error) {
 
 		for k, v := range meta.GetLabels() {
 			if v == membershipBindingOwner {
-				return []string{meta.GetNamespace() + "/" + k}, nil
+				keys := []string{meta.GetNamespace() + "/" + k}
+				logrus.Debugf("indexByMembershipBindingOwner keys: %v", keys)
+				return keys, nil
 			}
 		}
 	} else {

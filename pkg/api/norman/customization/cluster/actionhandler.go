@@ -97,6 +97,11 @@ func (a ActionHandler) ClusterActionHandler(actionName string, action *types.Act
 			return httperror.NewAPIError(httperror.PermissionDenied, "can not rotate certificates")
 		}
 		return a.RotateCertificates(actionName, action, apiContext)
+	case v32.ClusterActionRotateEncryptionKey:
+		if !canUpdateCluster() {
+			return httperror.NewAPIError(httperror.PermissionDenied, "can not rotate encryption key")
+		}
+		return a.RotateEncryptionKey(actionName, action, apiContext)
 	case v32.ClusterActionRunSecurityScan:
 		return a.runCisScan(actionName, action, apiContext)
 	case v32.ClusterActionSaveAsTemplate:

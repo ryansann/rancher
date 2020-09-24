@@ -492,6 +492,9 @@ func (p *Provisioner) reconcileCluster(cluster *v3.Cluster, create bool) (*v3.Cl
 	} else if spec.RancherKubernetesEngineConfig != nil && spec.RancherKubernetesEngineConfig.RotateCertificates != nil {
 		logrus.Infof("Rotating certificates for cluster [%s]", cluster.Name)
 		apiEndpoint, serviceAccountToken, caCert, updateTriggered, err = p.driverUpdate(cluster, *spec)
+	} else if spec.RancherKubernetesEngineConfig != nil && spec.RancherKubernetesEngineConfig.RotateEncryptionKey {
+		logrus.Infof("Rotating encryption key for cluster [%s]", cluster.Name)
+		apiEndpoint, serviceAccountToken, caCert, updateTriggered, err = p.driverUpdate(cluster, *spec)
 	} else {
 		logrus.Infof("Updating cluster [%s]", cluster.Name)
 
@@ -607,6 +610,7 @@ func (p *Provisioner) setGenericConfigs(cluster *v3.Cluster) {
 
 func resetRkeConfigFlags(cluster *v3.Cluster, updateTriggered bool) {
 	if cluster.Spec.RancherKubernetesEngineConfig != nil {
+		cluster.Spec.RancherKubernetesEngineConfig.RotateEncryptionKey = false
 		cluster.Spec.RancherKubernetesEngineConfig.RotateCertificates = nil
 		if cluster.Spec.RancherKubernetesEngineConfig.Restore.Restore {
 			cluster.Annotations[RkeRestoreAnnotation] = "true"

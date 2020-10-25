@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	util "github.com/rancher/rancher/pkg/cluster"
+
 	"github.com/pkg/errors"
 	"github.com/rancher/norman/objectclient"
 	"github.com/rancher/norman/types/convert"
@@ -293,13 +295,19 @@ func (m *Lifecycle) provision(driverConfig, nodeDir string, obj *v3.Node) (*v3.N
 		return obj, err
 	}
 
-	createCommandsArgs := buildCreateCommand(obj, configRawMap)
-	cmd, err := buildCommand(nodeDir, obj, createCommandsArgs)
+	cluster, err := m.clusterLister.Get("", obj.Namespace)
+	if err != nil {
+		return obj, err
+	}
+
+	createCommandsArgs, extraEnv := buildCreateCommand(obj, util.GetPrivateRepo(cluster), configRawMap)
+	cmd, err := buildCommand(nodeDir, obj, createCommandsArgs, extraEnv)
 	if err != nil {
 		return obj, err
 	}
 
 	logrus.Infof("Provisioning node %s", obj.Spec.RequestedHostname)
+	logrus.Tracef("[node-controller-rancher-machine] node provision command: %s", cmd.String())
 
 	stdoutReader, stderrReader, err := startReturnOutput(cmd)
 	if err != nil {
@@ -396,7 +404,7 @@ func (m *Lifecycle) deployAgent(nodeDir string, obj *v3.Node) error {
 
 	drun := clusterregistrationtokens.NodeCommand(token, nil)
 	args := buildAgentCommand(obj, drun)
-	cmd, err := buildCommand(nodeDir, obj, args)
+	cmd, err := buildCommand(nodeDir, obj, args, nil)
 	if err != nil {
 		return err
 	}

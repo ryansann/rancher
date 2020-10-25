@@ -26,16 +26,19 @@ import (
 var regExHyphen = regexp.MustCompile("([a-z])([A-Z])")
 
 var (
-	RegExNodeDirEnv      = regexp.MustCompile("^" + nodeDirEnvKey + ".*")
-	RegExNodePluginToken = regexp.MustCompile("^" + "MACHINE_PLUGIN_TOKEN=" + ".*")
-	RegExNodeDriverName  = regexp.MustCompile("^" + "MACHINE_PLUGIN_DRIVER_NAME=" + ".*")
+	RegExNodeDirEnv      = regexp.MustCompile("^" + nodeDirEnvKey + "=.*")
+	RegExNodePluginToken = regexp.MustCompile("^" + "MACHINE_PLUGIN_TOKEN" + "=.*")
+	RegExNodeDriverName  = regexp.MustCompile("^" + "MACHINE_PLUGIN_DRIVER_NAME" + "=.*")
 )
 
 const (
-	errorCreatingNode = "Error creating machine: "
-	nodeDirEnvKey     = "MACHINE_STORAGE_PATH="
-	nodeCmd           = "rancher-machine"
-	ec2TagFlag        = "tags"
+	errorCreatingNode  = "Error creating machine: "
+	nodeDirEnvKey      = "MACHINE_STORAGE_PATH"
+	registryUserEnvKey = "MACHINE_REGISTRY_USERNAME"
+	registryPassEnvKey = "MACHINE_REGISTRY_PASSWORD"
+	registryURLEnvKey  = "MACHINE_REGISTRY_URL"
+	nodeCmd            = "rancher-machine"
+	ec2TagFlag         = "tags"
 )
 
 func buildAgentCommand(node *v3.Node, dockerRun string) []string {
@@ -46,9 +49,18 @@ func buildAgentCommand(node *v3.Node, dockerRun string) []string {
 	return cmd
 }
 
-func buildCreateCommand(node *v3.Node, configMap map[string]interface{}) []string {
+func buildCreateCommand(node *v3.Node, reg *v3.PrivateRegistry, configMap map[string]interface{}) ([]string, []string) {
 	sDriver := strings.ToLower(node.Status.NodeTemplateSpec.Driver)
 	cmd := []string{"create", "-d", sDriver}
+
+	// if there's a private registry, build an extra env for the machine create command
+	// machine will authenticate the host to the registry so the agent image can be pulled
+	var extraEnv []string
+	if reg != nil {
+		extraEnv = append(extraEnv, strings.Join([]string{registryUserEnvKey, reg.User}, "="))
+		extraEnv = append(extraEnv, strings.Join([]string{registryPassEnvKey, reg.Password}, "="))
+		extraEnv = append(extraEnv, strings.Join([]string{registryURLEnvKey, reg.URL}, "="))
+	}
 
 	cmd = append(cmd, buildEngineOpts("--engine-install-url", []string{node.Status.NodeTemplateSpec.EngineInstallURL})...)
 	cmd = append(cmd, buildEngineOpts("--engine-opt", mapToSlice(node.Status.NodeTemplateSpec.EngineOpt))...)
@@ -83,8 +95,10 @@ func buildCreateCommand(node *v3.Node, configMap map[string]interface{}) []strin
 			}
 		}
 	}
+
 	cmd = append(cmd, node.Spec.RequestedHostname)
-	return cmd
+
+	return cmd, extraEnv
 }
 
 func buildEngineOpts(name string, values []string) []string {
@@ -106,7 +120,7 @@ func mapToSlice(m map[string]string) []string {
 	return ret
 }
 
-func buildCommand(nodeDir string, node *v3.Node, cmdArgs []string) (*exec.Cmd, error) {
+func buildCommand(nodeDir string, node *v3.Node, cmdArgs []string, extraEnv []string) (*exec.Cmd, error) {
 	// only in trace because machine has sensitive details and we can't control who debugs what in there easily
 	if logrus.GetLevel() >= logrus.TraceLevel {
 		// prepend --debug to pass directly to machine
@@ -115,7 +129,7 @@ func buildCommand(nodeDir string, node *v3.Node, cmdArgs []string) (*exec.Cmd, e
 
 	// In dev_mode, don't need jail or reference to jail in command
 	if os.Getenv("CATTLE_DEV_MODE") != "" {
-		env := initEnviron(nodeDir)
+		env := append(initEnviron(nodeDir), extraEnv...)
 		command := exec.Command(nodeCmd, cmdArgs...)
 		command.Env = env
 		logrus.Tracef("buildCommand args: %v", command.Args)
@@ -132,9 +146,10 @@ func buildCommand(nodeDir string, node *v3.Node, cmdArgs []string) (*exec.Cmd, e
 	command.SysProcAttr.Credential = cred
 	command.SysProcAttr.Chroot = path.Join(jailer.BaseJailPath, node.Namespace)
 	envvars := []string{
-		nodeDirEnvKey + nodeDir,
+		strings.Join([]string{nodeDirEnvKey, nodeDir}, "="),
 		"PATH=/usr/bin:/var/lib/rancher/management-state/bin",
 	}
+	envvars = append(envvars, extraEnv...)
 	command.Env = jailer.WhitelistEnvvars(envvars)
 
 	logrus.Tracef("buildCommand args: %v", command.Args)
@@ -143,10 +158,11 @@ func buildCommand(nodeDir string, node *v3.Node, cmdArgs []string) (*exec.Cmd, e
 
 func initEnviron(nodeDir string) []string {
 	env := os.Environ()
+	nodeDirEnv := strings.Join([]string{nodeDirEnvKey, nodeDir}, "=")
 	found := false
 	for idx, ev := range env {
 		if RegExNodeDirEnv.MatchString(ev) {
-			env[idx] = nodeDirEnvKey + nodeDir
+			env[idx] = nodeDirEnv
 			found = true
 		}
 		if RegExNodePluginToken.MatchString(ev) {
@@ -157,7 +173,7 @@ func initEnviron(nodeDir string) []string {
 		}
 	}
 	if !found {
-		env = append(env, nodeDirEnvKey+nodeDir)
+		env = append(env, nodeDirEnv)
 	}
 	return env
 }
@@ -242,7 +258,7 @@ func filterDockerMessage(msg string, node *v3.Node) (string, error) {
 }
 
 func nodeExists(nodeDir string, node *v3.Node) (bool, error) {
-	command, err := buildCommand(nodeDir, node, []string{"ls", "-q"})
+	command, err := buildCommand(nodeDir, node, []string{"ls", "-q"}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -276,7 +292,7 @@ func nodeExists(nodeDir string, node *v3.Node) (bool, error) {
 }
 
 func deleteNode(nodeDir string, node *v3.Node) error {
-	command, err := buildCommand(nodeDir, node, []string{"rm", "-f", node.Spec.RequestedHostname})
+	command, err := buildCommand(nodeDir, node, []string{"rm", "-f", node.Spec.RequestedHostname}, nil)
 	if err != nil {
 		return err
 	}

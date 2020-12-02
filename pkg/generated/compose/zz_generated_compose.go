@@ -24,6 +24,7 @@ type Config struct {
 	ProjectRoleTemplateBindings              map[string]managementClient.ProjectRoleTemplateBinding              `json:"projectRoleTemplateBindings,omitempty" yaml:"projectRoleTemplateBindings,omitempty"`
 	Clusters                                 map[string]managementClient.Cluster                                 `json:"clusters,omitempty" yaml:"clusters,omitempty"`
 	ClusterRegistrationTokens                map[string]managementClient.ClusterRegistrationToken                `json:"clusterRegistrationTokens,omitempty" yaml:"clusterRegistrationTokens,omitempty"`
+	EtcdBackups                              map[string]managementClient.EtcdBackup                              `json:"etcdBackups,omitempty" yaml:"etcdBackups,omitempty"`
 	Catalogs                                 map[string]managementClient.Catalog                                 `json:"catalogs,omitempty" yaml:"catalogs,omitempty"`
 	Templates                                map[string]managementClient.Template                                `json:"templates,omitempty" yaml:"templates,omitempty"`
 	CatalogTemplates                         map[string]managementClient.CatalogTemplate                         `json:"catalogTemplates,omitempty" yaml:"catalogTemplates,omitempty"`
@@ -57,7 +58,6 @@ type Config struct {
 	GlobalDnss                               map[string]managementClient.GlobalDns                               `json:"globalDnses,omitempty" yaml:"globalDnses,omitempty"`
 	GlobalDnsProviders                       map[string]managementClient.GlobalDnsProvider                       `json:"globalDnsProviders,omitempty" yaml:"globalDnsProviders,omitempty"`
 	KontainerDrivers                         map[string]managementClient.KontainerDriver                         `json:"kontainerDrivers,omitempty" yaml:"kontainerDrivers,omitempty"`
-	EtcdBackups                              map[string]managementClient.EtcdBackup                              `json:"etcdBackups,omitempty" yaml:"etcdBackups,omitempty"`
 	MonitorMetrics                           map[string]managementClient.MonitorMetric                           `json:"monitorMetrics,omitempty" yaml:"monitorMetrics,omitempty"`
 	ClusterMonitorGraphs                     map[string]managementClient.ClusterMonitorGraph                     `json:"clusterMonitorGraphs,omitempty" yaml:"clusterMonitorGraphs,omitempty"`
 	ProjectMonitorGraphs                     map[string]managementClient.ProjectMonitorGraph                     `json:"projectMonitorGraphs,omitempty" yaml:"projectMonitorGraphs,omitempty"`

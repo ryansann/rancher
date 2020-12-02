@@ -2,9 +2,11 @@ package client
 
 const (
 	RotateEncryptionKeyOutputType         = "rotateEncryptionKeyOutput"
+	RotateEncryptionKeyOutputFieldBackup  = "backup"
 	RotateEncryptionKeyOutputFieldMessage = "message"
 )
 
 type RotateEncryptionKeyOutput struct {
-	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+	Backup  *EtcdBackup `json:"backup,omitempty" yaml:"backup,omitempty"`
+	Message string      `json:"message,omitempty" yaml:"message,omitempty"`
 }

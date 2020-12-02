@@ -108,6 +108,9 @@ func (a ActionHandler) ClusterActionHandler(actionName string, action *types.Act
 		if !enabled {
 			return httperror.NewAPIError(httperror.InvalidAction, "encryption is disabled")
 		}
+		if !canBackupEtcd() {
+			return httperror.NewAPIError(httperror.PermissionDenied, "can not backup etcd, which is required for key rotation")
+		}
 		return a.RotateEncryptionKey(actionName, action, apiContext)
 	case v32.ClusterActionRunSecurityScan:
 		return a.runCisScan(actionName, action, apiContext)

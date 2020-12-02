@@ -1068,8 +1068,8 @@ github.com/russross/blackfriday v1.5.2 h1:HyvC0ARfnZBqnXwABFeSZHpKvJHJJfPz81GNue
 github.com/russross/blackfriday v1.5.2/go.mod h1:JO/DiYxRf+HjHt06OyowR9PTA263kcR/rfWxYHBV53g=
 github.com/russross/blackfriday/v2 v2.0.1 h1:lPqVAte+HuHNfhJ/0LC98ESWRz8afy9tM/0RK8m9o+Q=
 github.com/russross/blackfriday/v2 v2.0.1/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
-github.com/ryansann/rke v1.1.0-rc9.0.20200924185310-3cc1a80b7caf h1:bgd0x+7Ym5i+h+mxoZa4ZblrFCDWFXFpG4E6DkWgsWQ=
-github.com/ryansann/rke v1.1.0-rc9.0.20200924185310-3cc1a80b7caf/go.mod h1:aPSc14Hp8UGLscL/wB9ZZQHPX/kjDiPXLcoMTCY2NS4=
+github.com/ryansann/rke v1.1.0-rc9.0.20201201183322-78352e59cf79 h1:zGzNSauiS0XcqXd0qcRtslC/4CixMbYxfYXyeOqjfwY=
+github.com/ryansann/rke v1.1.0-rc9.0.20201201183322-78352e59cf79/go.mod h1:aPSc14Hp8UGLscL/wB9ZZQHPX/kjDiPXLcoMTCY2NS4=
 github.com/ryanuber/columnize v0.0.0-20160712163229-9b3edd62028f/go.mod h1:sm1tb6uqfes/u+d4ooFouqFdy9/2g9QGwK3SQygK0Ts=
 github.com/ryanuber/columnize v2.1.0+incompatible/go.mod h1:sm1tb6uqfes/u+d4ooFouqFdy9/2g9QGwK3SQygK0Ts=
 github.com/samalba/dockerclient v0.0.0-20151231000007-f661dd4754aa/go.mod h1:yeYR4SlaRZJct6lwNRKR+qd0CocnxxWDE7Vh5dxsn/w=

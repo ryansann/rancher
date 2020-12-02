@@ -24,6 +24,7 @@ type Interface interface {
 	ProjectRoleTemplateBindingsGetter
 	ClustersGetter
 	ClusterRegistrationTokensGetter
+	EtcdBackupsGetter
 	CatalogsGetter
 	TemplatesGetter
 	CatalogTemplatesGetter
@@ -61,7 +62,6 @@ type Interface interface {
 	GlobalDnsesGetter
 	GlobalDnsProvidersGetter
 	KontainerDriversGetter
-	EtcdBackupsGetter
 	ClusterScansGetter
 	MonitorMetricsGetter
 	ClusterMonitorGraphsGetter
@@ -290,6 +290,20 @@ func (c *Client) ClusterRegistrationTokens(namespace string) ClusterRegistration
 	sharedClient := c.clientFactory.ForResourceKind(ClusterRegistrationTokenGroupVersionResource, ClusterRegistrationTokenGroupVersionKind.Kind, true)
 	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ClusterRegistrationTokenResource, ClusterRegistrationTokenGroupVersionKind, clusterRegistrationTokenFactory{})
 	return &clusterRegistrationTokenClient{
+		ns:           namespace,
+		client:       c,
+		objectClient: objectClient,
+	}
+}
+
+type EtcdBackupsGetter interface {
+	EtcdBackups(namespace string) EtcdBackupInterface
+}
+
+func (c *Client) EtcdBackups(namespace string) EtcdBackupInterface {
+	sharedClient := c.clientFactory.ForResourceKind(EtcdBackupGroupVersionResource, EtcdBackupGroupVersionKind.Kind, true)
+	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &EtcdBackupResource, EtcdBackupGroupVersionKind, etcdBackupFactory{})
+	return &etcdBackupClient{
 		ns:           namespace,
 		client:       c,
 		objectClient: objectClient,
@@ -808,20 +822,6 @@ func (c *Client) KontainerDrivers(namespace string) KontainerDriverInterface {
 	sharedClient := c.clientFactory.ForResourceKind(KontainerDriverGroupVersionResource, KontainerDriverGroupVersionKind.Kind, false)
 	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &KontainerDriverResource, KontainerDriverGroupVersionKind, kontainerDriverFactory{})
 	return &kontainerDriverClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type EtcdBackupsGetter interface {
-	EtcdBackups(namespace string) EtcdBackupInterface
-}
-
-func (c *Client) EtcdBackups(namespace string) EtcdBackupInterface {
-	sharedClient := c.clientFactory.ForResourceKind(EtcdBackupGroupVersionResource, EtcdBackupGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &EtcdBackupResource, EtcdBackupGroupVersionKind, etcdBackupFactory{})
-	return &etcdBackupClient{
 		ns:           namespace,
 		client:       c,
 		objectClient: objectClient,

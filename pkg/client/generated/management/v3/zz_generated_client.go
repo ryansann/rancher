@@ -21,6 +21,7 @@ type Client struct {
 	ProjectRoleTemplateBinding              ProjectRoleTemplateBindingOperations
 	Cluster                                 ClusterOperations
 	ClusterRegistrationToken                ClusterRegistrationTokenOperations
+	EtcdBackup                              EtcdBackupOperations
 	Catalog                                 CatalogOperations
 	Template                                TemplateOperations
 	CatalogTemplate                         CatalogTemplateOperations
@@ -57,7 +58,6 @@ type Client struct {
 	GlobalDns                               GlobalDnsOperations
 	GlobalDnsProvider                       GlobalDnsProviderOperations
 	KontainerDriver                         KontainerDriverOperations
-	EtcdBackup                              EtcdBackupOperations
 	ClusterScan                             ClusterScanOperations
 	MonitorMetric                           MonitorMetricOperations
 	ClusterMonitorGraph                     ClusterMonitorGraphOperations
@@ -97,6 +97,7 @@ func NewClient(opts *clientbase.ClientOpts) (*Client, error) {
 	client.ProjectRoleTemplateBinding = newProjectRoleTemplateBindingClient(client)
 	client.Cluster = newClusterClient(client)
 	client.ClusterRegistrationToken = newClusterRegistrationTokenClient(client)
+	client.EtcdBackup = newEtcdBackupClient(client)
 	client.Catalog = newCatalogClient(client)
 	client.Template = newTemplateClient(client)
 	client.CatalogTemplate = newCatalogTemplateClient(client)
@@ -133,7 +134,6 @@ func NewClient(opts *clientbase.ClientOpts) (*Client, error) {
 	client.GlobalDns = newGlobalDnsClient(client)
 	client.GlobalDnsProvider = newGlobalDnsProviderClient(client)
 	client.KontainerDriver = newKontainerDriverClient(client)
-	client.EtcdBackup = newEtcdBackupClient(client)
 	client.ClusterScan = newClusterScanClient(client)
 	client.MonitorMetric = newMonitorMetricClient(client)
 	client.ClusterMonitorGraph = newClusterMonitorGraphClient(client)

@@ -1,6 +1,9 @@
 package helmop
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,24 +21,26 @@ import (
 	"github.com/rancher/apiserver/pkg/types"
 	types2 "github.com/rancher/rancher/pkg/api/steve/catalog/types"
 	catalog "github.com/rancher/rancher/pkg/apis/catalog.cattle.io/v1"
+	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/catalogv2/content"
 	catalogcontrollers "github.com/rancher/rancher/pkg/generated/controllers/catalog.cattle.io/v1"
 	namespaces "github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/steve/pkg/podimpersonation"
 	"github.com/rancher/steve/pkg/stores/proxy"
+	data2 "github.com/rancher/wrangler/pkg/data"
 	"github.com/rancher/wrangler/pkg/data/convert"
 	corev1controllers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/rancher/wrangler/pkg/schemas/validation"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -43,7 +48,14 @@ const (
 )
 
 var (
-	badChars = regexp.MustCompile("[^-.0-9a-zA-Z]")
+	badChars  = regexp.MustCompile("[^-.0-9a-zA-Z]")
+	thirty    = int64(30)
+	chartYAML = map[string]bool{
+		"chart.yaml": true,
+		"Chart.yaml": true,
+		"chart.yml":  true,
+		"Chart.yml":  true,
+	}
 )
 
 type Operations struct {
@@ -53,7 +65,7 @@ type Operations struct {
 	clusterRepos   catalogcontrollers.ClusterRepoClient
 	ops            catalogcontrollers.OperationClient
 	pods           corev1controllers.PodClient
-	releases       catalogcontrollers.ReleaseClient
+	apps           catalogcontrollers.AppClient
 	cg             proxy.ClientGetter
 }
 
@@ -70,7 +82,7 @@ func NewOperations(
 		pods:           pods,
 		clusterRepos:   catalog.ClusterRepo(),
 		ops:            catalog.Operation(),
-		releases:       catalog.Release(),
+		apps:           catalog.App(),
 	}
 }
 
@@ -80,11 +92,7 @@ func (s *Operations) Uninstall(ctx context.Context, user user.Info, namespace, n
 		return nil, err
 	}
 
-	return s.createOperation(ctx, user, status, cmds)
-}
-
-func (s *Operations) Rollback(ctx context.Context, user user.Info, namespace, name string, options io.Reader) (*catalog.Operation, error) {
-	status, cmds, err := s.getRollbackArgs(namespace, name, options)
+	user, err = s.getUser(user, namespace, name, true)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +106,7 @@ func (s *Operations) Upgrade(ctx context.Context, user user.Info, namespace, nam
 		return nil, err
 	}
 
-	user, err = s.getUser(user, namespace, name)
+	user, err = s.getUser(user, namespace, name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +120,7 @@ func (s *Operations) Install(ctx context.Context, user user.Info, namespace, nam
 		return nil, err
 	}
 
-	user, err = s.getUser(user, namespace, name)
+	user, err = s.getUser(user, namespace, name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +152,8 @@ func (s *Operations) proxyLogRequest(rw http.ResponseWriter, req *http.Request, 
 		Director: func(req *http.Request) {
 			req.URL = logURL
 			req.Host = logURL.Host
+			delete(req.Header, "Impersonate-Group")
+			delete(req.Header, "Impersonate-User")
 			delete(req.Header, "Authorization")
 			delete(req.Header, "Cookie")
 		},
@@ -182,7 +192,28 @@ func (s *Operations) Log(rw http.ResponseWriter, req *http.Request, namespace, n
 	return s.proxyLogRequest(rw, req, pod, client)
 }
 
-func (s *Operations) getSpec(namespace, name string) (*catalog.RepoSpec, error) {
+func (s *Operations) getSpec(namespace, name string, isApp bool) (*catalog.RepoSpec, error) {
+	if isApp {
+		rel, err := s.apps.Get(namespace, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+
+		if rel.Spec.Chart != nil && rel.Spec.Chart.Metadata != nil {
+			isClusterRepo := rel.Spec.Chart.Metadata.Annotations["catalog.cattle.io/ui-source-repo-type"]
+			if isClusterRepo != "cluster" {
+				return &catalog.RepoSpec{}, nil
+			}
+			clusterRepoName := rel.Spec.Chart.Metadata.Annotations["catalog.cattle.io/ui-source-repo"]
+			clusterRepo, err := s.clusterRepos.Get(clusterRepoName, metav1.GetOptions{})
+			if err != nil {
+				// don't report error if annotation doesn't exist
+				return &catalog.RepoSpec{}, nil
+			}
+			return &clusterRepo.Spec, nil
+		}
+		return &catalog.RepoSpec{}, nil
+	}
 	if namespace == "" {
 		clusterRepo, err := s.clusterRepos.Get(name, metav1.GetOptions{})
 		if err != nil {
@@ -194,8 +225,8 @@ func (s *Operations) getSpec(namespace, name string) (*catalog.RepoSpec, error) 
 	panic("namespace should not be empty")
 }
 
-func (s *Operations) getUser(userInfo user.Info, namespace, name string) (user.Info, error) {
-	repoSpec, err := s.getSpec(namespace, name)
+func (s *Operations) getUser(userInfo user.Info, namespace, name string, isApp bool) (user.Info, error) {
+	repoSpec, err := s.getSpec(namespace, name, isApp)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +242,7 @@ func (s *Operations) getUser(userInfo user.Info, namespace, name string) (user.I
 		return userInfo, nil
 	}
 	return &user.DefaultInfo{
-		Name: fmt.Sprintf("system:serviceaccount:%s:%s", repoSpec.ServiceAccount, serviceAccountNS),
+		Name: fmt.Sprintf("system:serviceaccount:%s:%s", serviceAccountNS, repoSpec.ServiceAccount),
 		Groups: []string{
 			"system:serviceaccounts",
 			"system:serviceaccounts:" + serviceAccountNS,
@@ -219,8 +250,8 @@ func (s *Operations) getUser(userInfo user.Info, namespace, name string) (user.I
 	}, nil
 }
 
-func (s *Operations) getUninstallArgs(releaseNamespace, releaseName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
-	rel, err := s.releases.Get(releaseNamespace, releaseName, metav1.GetOptions{})
+func (s *Operations) getUninstallArgs(appNamespace, appName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
+	rel, err := s.apps.Get(appNamespace, appName, metav1.GetOptions{})
 	if err != nil {
 		return catalog.OperationStatus{}, nil, err
 	}
@@ -242,38 +273,10 @@ func (s *Operations) getUninstallArgs(releaseNamespace, releaseName string, body
 	status := catalog.OperationStatus{
 		Action:    cmd.Operation,
 		Release:   rel.Spec.Name,
-		Namespace: releaseNamespace,
+		Namespace: appNamespace,
 	}
 
 	return status, Commands{cmd}, nil
-}
-
-func (s *Operations) getRollbackArgs(releaseNamespace, releaseName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
-	rel, err := s.releases.Get(releaseNamespace, releaseName, metav1.GetOptions{})
-	if err != nil {
-		return catalog.OperationStatus{}, nil, err
-	}
-
-	rollbackArgs := &types2.ChartRollbackAction{}
-	if err := json.NewDecoder(body).Decode(rollbackArgs); err != nil {
-		return catalog.OperationStatus{}, nil, err
-	}
-
-	cmd := Command{
-		Operation: "rollback",
-		ArgObjects: []interface{}{
-			rollbackArgs,
-		},
-		ReleaseName:      rel.Spec.Name,
-		ReleaseNamespace: rel.Namespace,
-	}
-	status := catalog.OperationStatus{
-		Action:    "rollback",
-		Release:   rel.Spec.Name,
-		Namespace: releaseNamespace,
-	}
-
-	return status, Commands{cmd}, err
 }
 
 func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
@@ -286,12 +289,18 @@ func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.R
 		return catalog.OperationStatus{}, nil, err
 	}
 
+	if upgradeArgs.MaxHistory == 0 {
+		upgradeArgs.MaxHistory = 5
+	}
+	upgradeArgs.Install = true
+
 	status := catalog.OperationStatus{
-		Action: "upgrade",
+		Action:    "upgrade",
+		Namespace: namespace(upgradeArgs.Namespace),
 	}
 
 	for _, chartUpgrade := range upgradeArgs.Charts {
-		cmd, err := s.getChartCommand(repoNamespace, repoName, chartUpgrade.ChartName, chartUpgrade.Version, chartUpgrade.Values)
+		cmd, err := s.getChartCommand(repoNamespace, repoName, chartUpgrade.ChartName, chartUpgrade.Version, chartUpgrade.Annotations, chartUpgrade.Values)
 		if err != nil {
 			return status, nil, err
 		}
@@ -303,8 +312,6 @@ func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.R
 		}
 
 		status.Release = chartUpgrade.ReleaseName
-		status.Namespace = namespace(chartUpgrade.Namespace)
-
 		commands = append(commands, cmd)
 	}
 
@@ -391,16 +398,15 @@ func (c Command) renderArgs() ([]string, error) {
 		}
 	}
 
+	delete(dataMap, "annotations")
 	delete(dataMap, "values")
 	delete(dataMap, "charts")
 	delete(dataMap, "releaseName")
 	delete(dataMap, "chartName")
+	delete(dataMap, "projectId")
 	if v, ok := dataMap["disableOpenAPIValidation"]; ok {
 		delete(dataMap, "disableOpenAPIValidation")
 		dataMap["disableOpenapiValidation"] = v
-	}
-	if c.Operation == "install" {
-		dataMap["createNamespace"] = true
 	}
 
 	for k, v := range dataMap {
@@ -430,20 +436,101 @@ func (c Command) renderArgs() ([]string, error) {
 		args = append(args, filepath.Join(helmDataPath, c.ChartFile))
 	}
 
-	return append([]string{"--debug", c.Operation}, args...), nil
+	return append([]string{c.Operation}, args...), nil
 }
 
 func sanitizeVersion(chartVersion string) string {
 	return badChars.ReplaceAllString(chartVersion, "-")
 }
 
-func (s *Operations) getChartCommand(namespace, name, chartName, chartVersion string, values map[string]interface{}) (Command, error) {
+func injectAnnotation(data []byte, annotations map[string]string) ([]byte, error) {
+	if len(annotations) == 0 {
+		return data, nil
+	}
+
+	tgz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		dest    = &bytes.Buffer{}
+		destGz  = gzip.NewWriter(dest)
+		destTar = tar.NewWriter(destGz)
+		tar     = tar.NewReader(tgz)
+	)
+
+	for {
+		header, err := tar.Next()
+		if err == io.EOF {
+			break
+		}
+
+		data, err := ioutil.ReadAll(tar)
+		if err != nil {
+			return nil, err
+		}
+
+		parts := strings.Split(header.Name, "/")
+		if len(parts) == 2 && chartYAML[parts[1]] {
+			data, err = addAnnotations(data, annotations)
+			if err != nil {
+				return nil, err
+			}
+			header.Size = int64(len(data))
+		}
+
+		if err := destTar.WriteHeader(header); err != nil {
+			return nil, err
+		}
+
+		_, err = destTar.Write(data)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err = destTar.Close(); err != nil {
+		return nil, err
+	}
+
+	if err = destGz.Close(); err != nil {
+		return nil, err
+	}
+
+	return dest.Bytes(), nil
+}
+
+func addAnnotations(data []byte, annotations map[string]string) ([]byte, error) {
+	chartData := map[string]interface{}{}
+	if err := yaml.Unmarshal(data, &chartData); err != nil {
+		return nil, err
+	}
+
+	chartAnnotations := data2.Object(chartData).Map("annotations")
+	if chartAnnotations == nil {
+		chartAnnotations = map[string]interface{}{}
+	}
+	for k, v := range annotations {
+		chartAnnotations[k] = v
+	}
+
+	chartData["annotations"] = chartAnnotations
+	return yaml.Marshal(chartData)
+}
+
+func (s *Operations) getChartCommand(namespace, name, chartName, chartVersion string, annotations map[string]string, values map[string]interface{}) (Command, error) {
 	chart, err := s.contentManager.Chart(namespace, name, chartName, chartVersion)
 	if err != nil {
 		return Command{}, err
 	}
 	chartData, err := ioutil.ReadAll(chart)
 	chart.Close()
+	if err != nil {
+		return Command{}, err
+	}
+
+	chartData, err = injectAnnotation(chartData, annotations)
 	if err != nil {
 		return Command{}, err
 	}
@@ -479,14 +566,7 @@ func (s *Operations) getInstallCommand(repoNamespace, repoName string, body io.R
 	)
 
 	for _, chartInstall := range installArgs.Charts {
-		var suffix []string
-		if chartInstall.ReleaseName == "" {
-			chartInstall.GenerateName = true
-		} else {
-			suffix = append(suffix, chartInstall.ReleaseName)
-		}
-
-		cmd, err := s.getChartCommand(repoNamespace, repoName, chartInstall.ChartName, chartInstall.Version, chartInstall.Values)
+		cmd, err := s.getChartCommand(repoNamespace, repoName, chartInstall.ChartName, chartInstall.Version, chartInstall.Annotations, chartInstall.Values)
 		if err != nil {
 			return status, nil, err
 		}
@@ -497,11 +577,26 @@ func (s *Operations) getInstallCommand(repoNamespace, repoName string, body io.R
 		}
 		cmd.ReleaseName = chartInstall.ReleaseName
 
+		if len(installArgs.Charts) == 1 {
+			if cmd.ReleaseName == "" {
+				cmd.ArgObjects = append(cmd.ArgObjects, map[string]interface{}{
+					"generateName": "true",
+				})
+			}
+		} else {
+			cmd.Operation = "upgrade"
+			cmd.ArgObjects = append(cmd.ArgObjects, map[string]interface{}{
+				"install": "true",
+			})
+		}
+
 		status.Release = chartInstall.ReleaseName
-		status.Namespace = namespace(chartInstall.Namespace)
 
 		cmds = append(cmds, cmd)
 	}
+
+	status.Namespace = namespace(installArgs.Namespace)
+	status.ProjectID = installArgs.ProjectID
 
 	return status, cmds, err
 }
@@ -515,7 +610,7 @@ func namespace(ns string) string {
 
 func (s *Operations) createOperation(ctx context.Context, user user.Info, status catalog.OperationStatus, cmds Commands) (*catalog.Operation, error) {
 	if status.Action != "uninstall" {
-		_, err := s.createNamespace(ctx, status.Namespace)
+		_, err := s.createNamespace(ctx, status.Namespace, status.ProjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -557,22 +652,60 @@ func (s *Operations) createOperation(ctx context.Context, user user.Info, status
 	return s.ops.UpdateStatus(op)
 }
 
-func (s *Operations) createNamespace(ctx context.Context, namespace string) (*v1.Namespace, error) {
+func (s *Operations) createNamespace(ctx context.Context, namespace, projectID string) (*v1.Namespace, error) {
 	apiContext := types.GetAPIContext(ctx)
 	client, err := s.cg.K8sInterface(apiContext)
 	if err != nil {
 		return nil, err
 	}
 
-	ns, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return client.CoreV1().Namespaces().Create(ctx, &v1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-			},
-		}, metav1.CreateOptions{})
+	annotations := map[string]string{}
+	if projectID != "" {
+		annotations["field.cattle.io/projectId"] = strings.ReplaceAll(projectID, "/", ":")
 	}
-	return ns, err
+	// We just always try to create an ignore the error. This is because you might have create but not get privileges
+	_, _ = client.CoreV1().Namespaces().Create(ctx, &v1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        namespace,
+			Annotations: annotations,
+		},
+	}, metav1.CreateOptions{})
+
+	if projectID == "" {
+		return client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	}
+
+	adminClient, err := s.cg.AdminK8sInterface()
+	if err != nil {
+		return nil, err
+	}
+
+	w, err := adminClient.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{
+		FieldSelector:  "metadata.name=" + namespace,
+		TimeoutSeconds: &thirty,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		w.Stop()
+		// no clue if this needed, but I'm afraid there will be a stuck producer
+		for range w.ResultChan() {
+		}
+	}()
+
+	for event := range w.ResultChan() {
+		if ns, ok := event.Object.(*v1.Namespace); ok {
+			if ok, err := namespaces.IsNamespaceConditionSet(ns, string(v3.ProjectConditionInitialRolesPopulated), true); err != nil {
+				return ns, err
+			} else if ok {
+				return ns, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("failed to wait for roles to be populated")
 }
 
 func (s *Operations) createPod(secretData map[string][]byte) (*v1.Pod, *podimpersonation.PodOptions) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	eksv1 "github.com/rancher/eks-operator/pkg/apis/eks.cattle.io/v1"
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/rancher/norman/api/access"
 	"github.com/rancher/norman/httperror"
 	"github.com/rancher/norman/types"
@@ -71,7 +71,7 @@ func (v *Validator) Validator(request *types.APIContext, schema *types.Schema, d
 		return err
 	}
 
-	if err := v.validateEKSConfig(request, data); err != nil {
+	if err := v.validateEKSConfig(request, data, &clusterSpec); err != nil {
 		return err
 	}
 
@@ -332,42 +332,39 @@ func (v *Validator) validateGenericEngineConfig(request *types.APIContext, spec 
 
 }
 
-func (v *Validator) validateEKSConfig(request *types.APIContext, cluster map[string]interface{}) error {
+func (v *Validator) validateEKSConfig(request *types.APIContext, cluster map[string]interface{}, clusterSpec *v32.ClusterSpec) error {
 	eksConfig, ok := cluster["eksConfig"].(map[string]interface{})
 	if !ok {
 		return nil
 	}
 
+	var prevCluster *v3.Cluster
+
+	if request.Method == http.MethodPut {
+		var err error
+		prevCluster, err = v.ClusterLister.Get("", request.ID)
+		if err != nil {
+			return err
+		}
+	}
+
 	// check user's access to cloud credential
 	if amazonCredential, ok := eksConfig["amazonCredentialSecret"].(string); ok {
-		var accessCred mgmtclient.CloudCredential
-		if err := access.ByID(request, &mgmtSchema.Version, mgmtclient.CloudCredentialType, amazonCredential, &accessCred); err != nil {
-			if apiError, ok := err.(*httperror.APIError); ok {
-				if apiError.Code.Status == httperror.PermissionDenied.Status || apiError.Code.Status == httperror.NotFound.Status {
-					return httperror.NewAPIError(httperror.NotFound, fmt.Sprintf("cloud credential not found"))
-				}
-			}
-			return httperror.WrapAPIError(err, httperror.ServerError, fmt.Sprintf("error accessing cloud credential"))
+		if err := validateEKSCredentialAuth(request, amazonCredential, prevCluster); err != nil {
+			return err
 		}
 	}
 
 	createFromImport := request.Method == http.MethodPost && eksConfig["imported"] == true
 
-	var prevSpec *eksv1.EKSClusterConfigSpec
-
-	if request.Method == http.MethodPut {
-		prevCluster, err := v.ClusterLister.Get("", request.ID)
-		if err != nil {
-			return err
-		}
-		prevSpec = prevCluster.Spec.EKSConfig
-	}
-
 	if !createFromImport {
-		if err := validateEKSNodegroups(request, eksConfig, prevSpec); err != nil {
+		if err := validateEKSKubernetesVersion(clusterSpec, prevCluster); err != nil {
 			return err
 		}
-		if err := validateEKSAccess(request, eksConfig, prevSpec); err != nil {
+		if err := validateEKSNodegroups(clusterSpec); err != nil {
+			return err
+		}
+		if err := validateEKSAccess(request, eksConfig, prevCluster); err != nil {
 			return err
 		}
 	}
@@ -402,33 +399,28 @@ func (v *Validator) validateEKSConfig(request *types.APIContext, cluster map[str
 	}
 
 	if !createFromImport {
-		// validate either all networking fields are provided or no networking fields are provided
+		// If security groups are provided, then subnets must also be provided
 		securityGroups, _ := eksConfig["securityGroups"].([]interface{})
 		subnets, _ := eksConfig["subnets"].([]interface{})
 
-		allNetworkingFieldsProvided := len(subnets) != 0 && len(securityGroups) != 0
-		noNetworkingFieldsProvided := len(subnets) == 0 && len(securityGroups) == 0
-
-		if !(allNetworkingFieldsProvided || noNetworkingFieldsProvided) {
-			if !createFromImport {
-				return httperror.NewAPIError(httperror.InvalidBodyContent,
-					"must provide both networking fields (subnets, securityGroups) or neither")
-			}
+		if len(securityGroups) != 0 && len(subnets) == 0 {
+			return httperror.NewAPIError(httperror.InvalidBodyContent,
+				"subnets must be provided if security groups are provided")
 		}
 	}
 
 	return nil
 }
 
-func validateEKSAccess(request *types.APIContext, eksConfig map[string]interface{}, prevSpec *eksv1.EKSClusterConfigSpec) error {
+func validateEKSAccess(request *types.APIContext, eksConfig map[string]interface{}, prevCluster *v3.Cluster) error {
 	publicAccess, _ := eksConfig["publicAccess"]
 	privateAccess, _ := eksConfig["privateAccess"]
 	if request.Method != http.MethodPost {
 		if publicAccess == nil {
-			publicAccess = prevSpec.PublicAccess
+			publicAccess = prevCluster.Spec.EKSConfig.PublicAccess
 		}
 		if privateAccess == nil {
-			privateAccess = prevSpec.PrivateAccess
+			privateAccess = prevCluster.Spec.EKSConfig.PrivateAccess
 		}
 	}
 
@@ -440,25 +432,84 @@ func validateEKSAccess(request *types.APIContext, eksConfig map[string]interface
 	return nil
 }
 
-func validateEKSNodegroups(request *types.APIContext, eksConfig map[string]interface{}, prevSpec *eksv1.EKSClusterConfigSpec) error {
-	noNodegroupsError := httperror.NewAPIError(httperror.InvalidBodyContent, fmt.Sprintf("must have at least one nodegroup"))
-	nodegroups, ok := eksConfig["nodeGroups"].([]interface{})
-	if !ok || nodegroups == nil {
-		if request.Method == http.MethodPost {
-			return noNodegroupsError
-		}
-		if prevSpec.NodeGroups != nil && len(prevSpec.NodeGroups) == 0 {
-			return noNodegroupsError
-		}
-	} else if len(nodegroups) == 0 {
-		return noNodegroupsError
+// validateEKSKubernetesVersion checks whether a kubernetes version is provided and if it is supported
+func validateEKSKubernetesVersion(spec *v32.ClusterSpec, prevCluster *v3.Cluster) error {
+	clusterVersion := spec.EKSConfig.KubernetesVersion
+	if clusterVersion == nil {
+		return nil
 	}
 
-	for _, ng := range nodegroups {
-		ngMap, _ := ng.(map[string]interface{})
-		if name, ok := ngMap["nodegroupName"].(string); ok && name == "" {
-			return noNodegroupsError
+	if aws.StringValue(clusterVersion) == "" {
+		return httperror.NewAPIError(httperror.InvalidBodyContent, "cluster kubernetes version cannot be empty string")
+	}
+
+	return nil
+}
+
+// validateEKSCredentialAuth validates that a user has access to the credential they are setting and the credential
+// they are overwriting. If there is no previous credential such as during a create or the old credential cannot
+// be found, the auth check will succeed as long as the user can access the new credential.
+func validateEKSCredentialAuth(request *types.APIContext, credential string, prevCluster *v3.Cluster) error {
+	var accessCred mgmtclient.CloudCredential
+	credentialErr := "error accessing cloud credential"
+	if err := access.ByID(request, &mgmtSchema.Version, mgmtclient.CloudCredentialType, credential, &accessCred); err != nil {
+		return httperror.NewAPIError(httperror.NotFound, credentialErr)
+	}
+
+	if prevCluster == nil {
+		return nil
+	}
+
+	if prevCluster.Spec.EKSConfig == nil {
+		return nil
+	}
+
+	// validate the user has access to the old cloud credential before allowing them to change it
+	credential = prevCluster.Spec.EKSConfig.AmazonCredentialSecret
+	if err := access.ByID(request, &mgmtSchema.Version, mgmtclient.CloudCredentialType, credential, &accessCred); err != nil {
+		if apiError, ok := err.(*httperror.APIError); ok {
+			if apiError.Code.Status == httperror.NotFound.Status {
+				// old cloud credential doesn't exist anymore, anyone can change it
+				return nil
+			}
 		}
+		return httperror.NewAPIError(httperror.NotFound, credentialErr)
+	}
+
+	return nil
+}
+
+// validateEKSNodegroups checks whether a given nodegroup version is empty or not supported.
+// More involved validation is performed in the EKS-operator.
+func validateEKSNodegroups(spec *v32.ClusterSpec) error {
+	nodegroups := spec.EKSConfig.NodeGroups
+	if nodegroups == nil {
+		return nil
+	}
+	if len(nodegroups) == 0 {
+		return httperror.NewAPIError(httperror.InvalidBodyContent, fmt.Sprintf("must have at least one nodegroup"))
+	}
+
+	var errors []string
+
+	for _, ng := range nodegroups {
+		name := aws.StringValue(ng.NodegroupName)
+		if name == "" {
+			return httperror.NewAPIError(httperror.InvalidBodyContent, fmt.Sprintf("nodegroupName cannot be an empty"))
+		}
+
+		version := ng.Version
+		if version == nil {
+			continue
+		}
+		if aws.StringValue(version) == "" {
+			errors = append(errors, fmt.Sprintf("nodegroup [%s] version cannot be empty string", name))
+			continue
+		}
+	}
+
+	if len(errors) != 0 {
+		return httperror.NewAPIError(httperror.InvalidBodyContent, fmt.Sprintf(strings.Join(errors, ";")))
 	}
 	return nil
 }
@@ -472,12 +523,14 @@ func validateEKS(prevCluster, newCluster map[string]interface{}) error {
 	}
 
 	// don't allow for updating subnets
-	if prev, ok := prevCluster["subnets"]; ok {
-		if new, ok := newCluster["subnets"]; ok {
-			if !reflect.DeepEqual(prev, new) {
-				return httperror.NewAPIError(httperror.InvalidBodyContent, "cannot modify EKS subnets after creation")
-			}
-		}
+	prev, _ := prevCluster["subnets"].([]interface{})
+	new, _ := newCluster["subnets"].([]interface{})
+	if len(prev) == 0 && len(new) == 0 {
+		// should treat empty and nil as equal
+		return nil
+	}
+	if !reflect.DeepEqual(prev, new) {
+		return httperror.NewAPIError(httperror.InvalidBodyContent, "cannot modify EKS subnets after creation")
 	}
 	return nil
 }

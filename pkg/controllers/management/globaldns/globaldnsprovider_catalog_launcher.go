@@ -9,8 +9,8 @@ import (
 
 	"github.com/rancher/norman/types/convert"
 	passwordutil "github.com/rancher/rancher/pkg/api/norman/store/password"
+	"github.com/rancher/rancher/pkg/catalog/manager"
 	cutils "github.com/rancher/rancher/pkg/catalog/utils"
-	versionutil "github.com/rancher/rancher/pkg/catalog/utils"
 	"github.com/rancher/rancher/pkg/controllers/management/rbac"
 	v1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
@@ -43,6 +43,7 @@ type ProviderCatalogLauncher struct {
 	userManager       user.Manager
 	secrets           v1.SecretInterface
 	templateLister    v3.CatalogTemplateLister
+	catalogManager    manager.CatalogManager
 }
 
 func newGlobalDNSProviderCatalogLauncher(ctx context.Context, mgmt *config.ManagementContext) *ProviderCatalogLauncher {
@@ -54,6 +55,7 @@ func newGlobalDNSProviderCatalogLauncher(ctx context.Context, mgmt *config.Manag
 		userManager:       mgmt.UserManager,
 		secrets:           mgmt.Core.Secrets(""),
 		templateLister:    mgmt.Management.CatalogTemplates(metav1.NamespaceAll).Controller().Lister(),
+		catalogManager:    mgmt.CatalogManager,
 	}
 	return n
 }
@@ -120,6 +122,11 @@ func (n *ProviderCatalogLauncher) handleRoute53Provider(obj *v3.GlobalDnsProvide
 		"aws.roleArn":         obj.Spec.Route53ProviderConfig.RoleArn,
 		"aws.region":          obj.Spec.Route53ProviderConfig.Region,
 	}
+	for k, v := range obj.Spec.Route53ProviderConfig.AdditionalOptions {
+		if _, ok := answers[k]; !ok {
+			answers[k] = v
+		}
+	}
 
 	if obj.Spec.RootDomain != "" {
 		answers["domainFilters[0]"] = obj.Spec.RootDomain
@@ -155,6 +162,11 @@ func (n *ProviderCatalogLauncher) handleCloudflareProvider(obj *v3.GlobalDnsProv
 		"policy":             "sync",
 		"cloudflare.proxied": isProxy,
 	}
+	for k, v := range obj.Spec.CloudflareProviderConfig.AdditionalOptions {
+		if _, ok := answers[k]; !ok {
+			answers[k] = v
+		}
+	}
 
 	if obj.Spec.RootDomain != "" {
 		answers["domainFilters[0]"] = obj.Spec.RootDomain
@@ -186,6 +198,11 @@ func (n *ProviderCatalogLauncher) handleAlidnsProvider(obj *v3.GlobalDnsProvider
 		"rbac.create":            "true",
 		"policy":                 "sync",
 	}
+	for k, v := range obj.Spec.AlidnsProviderConfig.AdditionalOptions {
+		if _, ok := answers[k]; !ok {
+			answers[k] = v
+		}
+	}
 
 	if obj.Spec.RootDomain != "" {
 		answers["domainFilters[0]"] = obj.Spec.RootDomain
@@ -213,7 +230,7 @@ func (n *ProviderCatalogLauncher) createUpdateExternalDNSApp(obj *v3.GlobalDnsPr
 		}
 	} else {
 		//create new app
-		appCatalogID, err := n.getExternalDNSCatalogID()
+		appCatalogID, err := n.getExternalDNSCatalogID(localClusterName)
 		if err != nil {
 			return nil, err
 		}
@@ -285,9 +302,9 @@ func (n *ProviderCatalogLauncher) getSystemProjectID() (string, error) {
 	return systemProject.Name, nil
 }
 
-func (n *ProviderCatalogLauncher) getExternalDNSCatalogID() (string, error) {
+func (n *ProviderCatalogLauncher) getExternalDNSCatalogID(clusterName string) (string, error) {
 	templateVersionID := n.getRancherExternalDNSTemplateID()
-	return versionutil.GetSystemAppCatalogID(templateVersionID, n.templateLister)
+	return n.catalogManager.GetSystemAppCatalogID(templateVersionID, clusterName)
 }
 
 func (n *ProviderCatalogLauncher) getRancherExternalDNSTemplateID() string {

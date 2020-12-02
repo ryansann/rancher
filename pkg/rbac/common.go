@@ -10,12 +10,15 @@ import (
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/ref"
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
-	NamespaceID = "namespaceId"
-	ProjectID   = "projectId"
-	ClusterID   = "clusterId"
+	NamespaceID           = "namespaceId"
+	ProjectID             = "projectId"
+	ClusterID             = "clusterId"
+	GlobalAdmin           = "admin"
+	GlobalRestrictedAdmin = "restricted-admin"
 )
 
 // BuildSubjectFromRTB This function will generate
@@ -79,7 +82,13 @@ func BuildSubjectFromRTB(object interface{}) (rbacv1.Subject, error) {
 }
 
 func GrbCRBName(grb *v3.GlobalRoleBinding) string {
-	return "globaladmin-" + GetGRBTargetKey(grb)
+	var prefix string
+	if grb.GlobalRoleName == GlobalAdmin {
+		prefix = "globaladmin-"
+	} else {
+		prefix = "globalrestrictedadmin-"
+	}
+	return prefix + GetGRBTargetKey(grb)
 }
 
 // GetGRBSubject creates and returns a subject that is
@@ -141,4 +150,8 @@ func TypeFromContext(apiContext *types.APIContext, resource *types.RawResource) 
 		return apiContext.Type
 	}
 	return resource.Type
+}
+
+func GetRTBLabel(objMeta metav1.ObjectMeta) string {
+	return objMeta.Namespace + "_" + objMeta.Name
 }

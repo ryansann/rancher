@@ -77,6 +77,7 @@ const (
 	ClusterDriverK3os     = "k3os"
 	ClusterDriverRke2     = "rke2"
 	ClusterDriverEKS      = "EKS"
+	ClusterDriverRancherD = "rancherd"
 )
 
 // +genclient
@@ -110,7 +111,6 @@ type ClusterSpecBase struct {
 	WindowsPreferedCluster               bool                                    `json:"windowsPreferedCluster" norman:"noupdate"`
 	LocalClusterAuthEndpoint             LocalClusterAuthEndpoint                `json:"localClusterAuthEndpoint,omitempty"`
 	ScheduledClusterScan                 *ScheduledClusterScan                   `json:"scheduledClusterScan,omitempty"`
-	FleetWorkspaceName                   string                                  `json:"fleetWorkspaceName,omitempty"`
 }
 
 type ClusterSpec struct {
@@ -130,6 +130,7 @@ type ClusterSpec struct {
 	ClusterTemplateRevisionName         string                      `json:"clusterTemplateRevisionName,omitempty" norman:"type=reference[clusterTemplateRevision]"`
 	ClusterTemplateAnswers              Answer                      `json:"answers,omitempty"`
 	ClusterTemplateQuestions            []Question                  `json:"questions,omitempty" norman:"nocreate,noupdate"`
+	FleetWorkspaceName                  string                      `json:"fleetWorkspaceName,omitempty"`
 }
 
 type ImportedConfig struct {

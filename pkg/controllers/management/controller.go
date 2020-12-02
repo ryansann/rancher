@@ -28,6 +28,7 @@ import (
 	"github.com/rancher/rancher/pkg/controllers/management/nodepool"
 	"github.com/rancher/rancher/pkg/controllers/management/nodetemplate"
 	"github.com/rancher/rancher/pkg/controllers/management/podsecuritypolicy"
+	"github.com/rancher/rancher/pkg/controllers/management/rbac"
 	"github.com/rancher/rancher/pkg/controllers/management/rkeworkerupgrader"
 	"github.com/rancher/rancher/pkg/controllers/management/usercontrollers"
 	"github.com/rancher/rancher/pkg/types/config"
@@ -55,7 +56,7 @@ func Register(ctx context.Context, management *config.ManagementContext, manager
 	nodedriver.Register(ctx, management)
 	nodepool.Register(ctx, management)
 	cloudcredential.Register(ctx, management)
-	node.Register(ctx, management)
+	node.Register(ctx, management, manager)
 	podsecuritypolicy.Register(ctx, management)
 	etcdbackup.Register(ctx, management)
 	cis.Register(ctx, management)
@@ -64,6 +65,7 @@ func Register(ctx context.Context, management *config.ManagementContext, manager
 	clustertemplate.Register(ctx, management)
 	nodetemplate.Register(ctx, management)
 	rkeworkerupgrader.Register(ctx, management, manager.ScaledContext)
+	rbac.Register(ctx, management)
 
 	// Register last
 	auth.RegisterLate(ctx, management)

@@ -44,8 +44,6 @@ func (o *operation) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		op, err = o.ops.Install(apiRequest.Context(), user, ns, name, req.Body)
 	case "upgrade":
 		op, err = o.ops.Upgrade(apiRequest.Context(), user, ns, name, req.Body)
-	case "rollback":
-		op, err = o.ops.Rollback(apiRequest.Context(), user, ns, name, req.Body)
 	case "uninstall":
 		op, err = o.ops.Uninstall(apiRequest.Context(), user, ns, name, req.Body)
 	}
@@ -74,10 +72,10 @@ func (o *operation) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (o *operation) OnAdd(gvr schema2.GroupVersionResource, key string, obj runtime.Object) error {
-	return o.ops.Impersonator.PurgeOldRoles(gvr, key, obj)
+func (o *operation) OnAdd(gvk schema2.GroupVersionKind, key string, obj runtime.Object) error {
+	return o.ops.Impersonator.PurgeOldRoles(gvk, key, obj)
 }
 
-func (o *operation) OnChange(gvr schema2.GroupVersionResource, key string, obj, oldObj runtime.Object) error {
-	return o.ops.Impersonator.PurgeOldRoles(gvr, key, obj)
+func (o *operation) OnChange(gvk schema2.GroupVersionKind, key string, obj, oldObj runtime.Object) error {
+	return o.ops.Impersonator.PurgeOldRoles(gvk, key, obj)
 }

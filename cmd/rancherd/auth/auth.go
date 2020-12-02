@@ -3,6 +3,9 @@ package auth
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/rancher/wrangler/pkg/randomtoken"
@@ -30,14 +33,49 @@ var (
 	defaultAdminLabel      = map[string]string{defaultAdminLabelKey: defaultAdminLabelValue}
 )
 
-func ResetAdmin(_ *cli.Context) error {
+func ResetAdmin(clx *cli.Context) error {
+	if err := validation(clx); err != nil {
+		return err
+	}
+	if err := resetAdmin(clx); err != nil {
+		return errors.Wrap(err, "cluster and rancher are not ready. Please try later.")
+	}
+	return nil
+}
+
+func validation(clx *cli.Context) error {
+	if clx.String("password") != "" && clx.String("password-file") != "" {
+		return errors.New("only one option can be set for password and password-file")
+	}
+	return nil
+}
+
+func resetAdmin(clx *cli.Context) error {
 	ctx := context.Background()
 	token, err := randomtoken.Generate()
 	if err != nil {
 		return err
 	}
+	mustChangePassword := true
+	if clx.String("password") != "" {
+		token = clx.String("password")
+		mustChangePassword = false
+	}
+	if clx.String("password-file") != "" {
+		passwordFromFile, err := ioutil.ReadFile(clx.String("password-file"))
+		if err != nil {
+			return err
+		}
+		token = strings.TrimSuffix(string(passwordFromFile), "\n")
+		mustChangePassword = false
+	}
 
-	conf, err := clientcmd.BuildConfigFromFlags("", "/etc/rancher/rke2/rke2.yaml")
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		kubeconfig = "/etc/rancher/rke2/rke2.yaml"
+	}
+
+	conf, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return err
 	}
@@ -65,9 +103,12 @@ func ResetAdmin(_ *cli.Context) error {
 		Version:  "v3",
 		Resource: "settings",
 	})
-
+	clustersClient := client.Resource(schema.GroupVersionResource{
+		Group:    "management.cattle.io",
+		Version:  "v3",
+		Resource: "clusters",
+	})
 	var adminName string
-
 	set := labels.Set(defaultAdminLabel)
 	admins, err := userClient.List(ctx, v1.ListOptions{LabelSelector: set.String()})
 	if err != nil {
@@ -135,13 +176,16 @@ func ResetAdmin(_ *cli.Context) error {
 					"displayName":        "Default Admin",
 					"username":           "admin",
 					"password":           string(hash),
-					"mustChangePassword": true,
+					"mustChangePassword": mustChangePassword,
 				},
 			}, v1.CreateOptions{})
 		if err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
 		adminName = admin.GetName()
+		if err := setClusterAnnotation(ctx, clustersClient, adminName); err != nil {
+			return err
+		}
 
 		bindings, err := grbClient.List(ctx, v1.ListOptions{LabelSelector: set.String()})
 		if err != nil {
@@ -157,7 +201,7 @@ func ResetAdmin(_ *cli.Context) error {
 						},
 						"apiVersion":     "management.cattle.io/v3",
 						"kind":           "GlobalRoleBinding",
-						"username":       adminName,
+						"userName":       adminName,
 						"globalRoleName": "admin",
 					},
 				}, v1.CreateOptions{})
@@ -259,4 +303,49 @@ func ResetAdmin(_ *cli.Context) error {
 	logrus.Infof("Server URL: %v", serverURL)
 	logrus.Infof("Default admin and password created. Username: admin, Password: %v", token)
 	return nil
+}
+
+func setClusterAnnotation(ctx context.Context, clustersClient dynamic.NamespaceableResourceInterface, adminName string) error {
+	cluster, err := clustersClient.Get(ctx, "local", v1.GetOptions{})
+	if err != nil {
+		return errors.Errorf("Local cluster is not ready yet")
+	}
+	if adminName == "" {
+		return errors.Errorf("User is not set yet")
+	}
+	ann := cluster.GetAnnotations()
+	if ann == nil {
+		ann = make(map[string]string)
+	}
+	ann["field.cattle.io/creatorId"] = adminName
+	cluster.SetAnnotations(ann)
+
+	// reset CreatorMadeOwner condition so that controller will reconcile and reassign admin to the default user
+	setConditionToFalse(cluster.Object, "DefaultProjectCreated")
+	setConditionToFalse(cluster.Object, "SystemProjectCreated")
+	setConditionToFalse(cluster.Object, "CreatorMadeOwner")
+
+	_, err = clustersClient.Update(ctx, cluster, v1.UpdateOptions{})
+	return err
+}
+
+func setConditionToFalse(object map[string]interface{}, cond string) {
+	status, ok := object["status"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, condition := range conditions {
+		m, ok := condition.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, ok := m["type"].(string); ok && t == cond {
+			m["status"] = "False"
+		}
+	}
+	return
 }

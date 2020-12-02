@@ -5,13 +5,13 @@ go 1.14
 replace (
 	git.apache.org/thrift.git => github.com/apache/thrift v0.12.0
 	github.com/Azure/go-autorest => github.com/Azure/go-autorest v12.2.0+incompatible
-	github.com/crewjam/saml => github.com/rancher/saml v0.0.0-20180713225824-ce1532152fde
+	github.com/crewjam/saml => github.com/rancher/saml v0.0.3-rancher1
 	github.com/knative/pkg => github.com/rancher/pkg v0.0.0-20190514055449-b30ab9de040e
 	github.com/matryer/moq => github.com/rancher/moq v0.0.0-20200712062324-13d1f37d2d77
 	github.com/opencontainers/runc => github.com/opencontainers/runc v1.0.0-rc10
 	github.com/rancher/rancher/pkg/apis => ./pkg/apis
 	github.com/rancher/rancher/pkg/client => ./pkg/client
-	github.com/rancher/rke => github.com/ryansann/rke v1.1.0-rc9.0.20201201183322-78352e59cf79
+	github.com/rancher/rke => github.com/ryansann/rke v1.1.0-rc9.0.20201202191811-a5136c5b04ca
 	golang.org/x/sys => golang.org/x/sys v0.0.0-20190921190940-14da1ac737cc // This is because docker/docker/pkg/archive has a dependency on an old x/sys
 	helm.sh/helm/v3 => github.com/rancher/helm/v3 v3.3.0-rancher1
 
@@ -20,7 +20,7 @@ replace (
 	k8s.io/apimachinery => github.com/rancher/apimachinery v0.19.0-rancher1
 	k8s.io/apiserver => k8s.io/apiserver v0.19.0
 	k8s.io/cli-runtime => k8s.io/cli-runtime v0.19.0
-	k8s.io/client-go => github.com/rancher/client-go v1.19.0-rancher.1
+	k8s.io/client-go => github.com/rancher/client-go v1.19.0-rancher.2
 	k8s.io/cloud-provider => k8s.io/cloud-provider v0.19.0
 	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.19.0
 	k8s.io/code-generator => k8s.io/code-generator v0.19.0
@@ -81,22 +81,22 @@ require (
 	github.com/prometheus/client_golang v1.7.1
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.10.0
-	github.com/rancher/apiserver v0.0.0-20200730050206-780f0e4c5f48
+	github.com/rancher/apiserver v0.0.0-20201023000256-1a0a904f9197
 	github.com/rancher/dynamiclistener v0.2.1-0.20200910203214-85f32491cb09
-	github.com/rancher/eks-operator v0.1.0-rc28
-	github.com/rancher/kubernetes-provider-detector v0.1.0
+	github.com/rancher/eks-operator v1.0.4
+	github.com/rancher/kubernetes-provider-detector v0.1.2
 	github.com/rancher/lasso v0.0.0-20200905045615-7fcb07d6a20b
 	github.com/rancher/machine v0.15.0-rancher25
-	github.com/rancher/norman v0.0.0-20200908202416-992a35eef40f
+	github.com/rancher/norman v0.0.0-20200930000340-693d65aaffe3
 	github.com/rancher/rancher/pkg/apis v0.0.0
 	github.com/rancher/rancher/pkg/client v0.0.0
 	github.com/rancher/rdns-server v0.0.0-20180802070304-bf662911db6a
 	github.com/rancher/remotedialer v0.2.6-0.20200820180140-e5448aaba7ee
-	github.com/rancher/rke v1.2.0-rc9.0.20200915003215-d63c749b4176
+	github.com/rancher/rke v1.2.4-0.20201124091230-7e3bddb2c5bc
 	github.com/rancher/security-scan v0.1.7-0.20200222041501-f7377f127168
-	github.com/rancher/steve v0.0.0-20200917192307-7c151f76f800
+	github.com/rancher/steve v0.0.0-20201110183734-21c7add15f64
 	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20200825145542-a04e2061be24
-	github.com/rancher/wrangler v0.6.2-0.20200915162151-29365defe4ed
+	github.com/rancher/wrangler v0.7.3-0.20201023210123-9b7d265b90ec
 	github.com/robfig/cron v1.1.0
 	github.com/russellhaering/goxmldsig v0.0.0-20180430223755-7acd5e4a6ef7 // indirect
 	github.com/satori/go.uuid v1.2.0

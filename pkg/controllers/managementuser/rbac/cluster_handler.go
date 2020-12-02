@@ -21,7 +21,8 @@ func newClusterHandler(workload *config.UserContext) v3.ClusterHandlerFunc { //*
 	informer := workload.Management.Management.GlobalRoleBindings("").Controller().Informer()
 
 	ch := &clusterHandler{
-		grbIndexer: informer.GetIndexer(),
+		clusterName: workload.ClusterName,
+		grbIndexer:  informer.GetIndexer(),
 		// Management level resources
 		grbController: workload.Management.Management.GlobalRoleBindings("").Controller(),
 		clusters:      workload.Management.Management.Clusters(""),
@@ -33,7 +34,8 @@ func newClusterHandler(workload *config.UserContext) v3.ClusterHandlerFunc { //*
 }
 
 type clusterHandler struct {
-	grbIndexer cache.Indexer
+	clusterName string
+	grbIndexer  cache.Indexer
 	// Management level resources
 	grbController v3.GlobalRoleBindingController
 	clusters      v3.ClusterInterface
@@ -43,7 +45,13 @@ type clusterHandler struct {
 }
 
 func (h *clusterHandler) sync(key string, obj *v3.Cluster) (runtime.Object, error) {
-	if key == "" || obj == nil {
+	// We recieve clusters with no data, when that happens no checks will work so just ignore them
+	if key == "" || obj == nil || obj.Name == "" {
+		return nil, nil
+	}
+
+	// Don't operate on a cluster this handler isn't created for
+	if h.clusterName != obj.Name {
 		return nil, nil
 	}
 
@@ -59,41 +67,48 @@ func (h *clusterHandler) sync(key string, obj *v3.Cluster) (runtime.Object, erro
 
 func (h *clusterHandler) doSync(cluster *v3.Cluster) error {
 	_, err := v32.ClusterConditionGlobalAdminsSynced.DoUntilTrue(cluster, func() (runtime.Object, error) {
-		grbs, err := h.grbIndexer.ByIndex(grbByRoleIndex, "admin")
-		if err != nil {
-			return nil, err
-		}
-
-		for _, x := range grbs {
-			grb, _ := x.(*v3.GlobalRoleBinding)
-			bindingName := rbac.GrbCRBName(grb)
-			b, err := h.userGRBLister.Get("", bindingName)
-			if err != nil && !k8serrors.IsNotFound(err) {
-				return nil, err
-			}
-
-			if b != nil {
-				// binding exists, nothing to do
+		// Sync both admin types
+		for _, roleName := range []string{rbac.GlobalAdmin, rbac.GlobalRestrictedAdmin} {
+			// Do not sync restricted-admin to the local cluster as 'cluster-admin'
+			if cluster.Name == "local" && roleName == rbac.GlobalRestrictedAdmin {
 				continue
 			}
-
-			_, err = h.userGRB.Create(&k8srbac.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: bindingName,
-				},
-				Subjects: []k8srbac.Subject{
-					{
-						Kind: "User",
-						Name: grb.UserName,
-					},
-				},
-				RoleRef: k8srbac.RoleRef{
-					Name: "cluster-admin",
-					Kind: "ClusterRole",
-				},
-			})
-			if err != nil && !k8serrors.IsAlreadyExists(err) {
+			grbs, err := h.grbIndexer.ByIndex(grbByRoleIndex, roleName)
+			if err != nil {
 				return nil, err
+			}
+
+			for _, x := range grbs {
+				grb, _ := x.(*v3.GlobalRoleBinding)
+				bindingName := rbac.GrbCRBName(grb)
+				b, err := h.userGRBLister.Get("", bindingName)
+				if err != nil && !k8serrors.IsNotFound(err) {
+					return nil, err
+				}
+
+				if b != nil {
+					// binding exists, nothing to do
+					continue
+				}
+
+				_, err = h.userGRB.Create(&k8srbac.ClusterRoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: bindingName,
+					},
+					Subjects: []k8srbac.Subject{
+						{
+							Kind: "User",
+							Name: grb.UserName,
+						},
+					},
+					RoleRef: k8srbac.RoleRef{
+						Name: "cluster-admin",
+						Kind: "ClusterRole",
+					},
+				})
+				if err != nil && !k8serrors.IsAlreadyExists(err) {
+					return nil, err
+				}
 			}
 		}
 		return nil, nil

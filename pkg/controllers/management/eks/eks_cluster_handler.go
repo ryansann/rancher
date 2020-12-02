@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ import (
 	apimgmtv3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	apiprojv3 "github.com/rancher/rancher/pkg/apis/project.cattle.io/v3"
 	utils2 "github.com/rancher/rancher/pkg/app"
-	"github.com/rancher/rancher/pkg/catalog/utils"
+	"github.com/rancher/rancher/pkg/catalog/manager"
 	"github.com/rancher/rancher/pkg/controllers/management/eksupstreamrefresh"
 	"github.com/rancher/rancher/pkg/controllers/management/rbac"
 	v3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
@@ -39,10 +40,12 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -52,10 +55,16 @@ const (
 	eksOperatorTemplate = "system-library-rancher-eks-operator"
 	eksOperator         = "rancher-eks-operator"
 	localCluster        = "local"
+	enqueueTime         = time.Second * 5
 	importedAnno        = "eks.cattle.io/imported"
 )
 
-// TODO: switch to wrangler caches and clients for all types
+type eksOperatorValues struct {
+	HTTPProxy  string `json:"httpProxy,omitempty"`
+	HTTPSProxy string `json:"httpsProxy,omitempty"`
+	NoProxy    string `json:"noProxy,omitempty"`
+}
+
 type eksOperatorController struct {
 	clusterEnqueueAfter  func(name string, duration time.Duration)
 	secretsCache         wranglerv1.SecretCache
@@ -65,6 +74,7 @@ type eksOperatorController struct {
 	appClient            projectv3.AppInterface
 	nsClient             corev1.NamespaceInterface
 	clusterClient        v3.ClusterClient
+	catalogManager       manager.CatalogManager
 	systemAccountManager *systemaccount.Manager
 	dynamicClient        dynamic.NamespaceableResourceInterface
 }
@@ -86,6 +96,7 @@ func Register(ctx context.Context, wContext *wrangler.Context, mgmtCtx *config.M
 		appClient:            mgmtCtx.Project.Apps(""),
 		nsClient:             mgmtCtx.Core.Namespaces(""),
 		clusterClient:        wContext.Mgmt.Cluster(),
+		catalogManager:       mgmtCtx.CatalogManager,
 		systemAccountManager: systemaccount.NewManager(mgmtCtx),
 		dynamicClient:        eksCCDynamicClient,
 	}
@@ -95,7 +106,7 @@ func Register(ctx context.Context, wContext *wrangler.Context, mgmtCtx *config.M
 
 func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Cluster) (*mgmtv3.Cluster, error) {
 	if cluster == nil || cluster.DeletionTimestamp != nil {
-		return nil, nil
+		return cluster, nil
 	}
 
 	if cluster.Spec.EKSConfig == nil {
@@ -103,6 +114,19 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 	}
 
 	if err := e.deployEKSOperator(); err != nil {
+		failedToDeployEKSOperatorErr := "failed to deploy eks-operator: %v"
+		var conditionErr error
+		if cluster.Spec.EKSConfig.Imported {
+			cluster, conditionErr = e.setFalse(cluster, apimgmtv3.ClusterConditionPending, fmt.Sprintf(failedToDeployEKSOperatorErr, err))
+			if conditionErr != nil {
+				return cluster, conditionErr
+			}
+		} else {
+			cluster, conditionErr = e.setFalse(cluster, apimgmtv3.ClusterConditionProvisioned, fmt.Sprintf(failedToDeployEKSOperatorErr, err))
+			if conditionErr != nil {
+				return cluster, conditionErr
+			}
+		}
 		return cluster, err
 	}
 
@@ -129,7 +153,7 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 			return cluster, err
 		}
 
-		eksClusterConfigDynamic, err = buildEKSCCObject(cluster)
+		eksClusterConfigDynamic, err = buildEKSCCCreateObject(cluster)
 		if err != nil {
 			return cluster, err
 		}
@@ -156,7 +180,9 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 	status, _ := eksClusterConfigDynamic.Object["status"].(map[string]interface{})
 	phase, _ := status["phase"]
 	failureMessage, _ := status["failureMessage"].(string)
-
+	if strings.Contains(failureMessage, "403") {
+		failureMessage = fmt.Sprintf("cannot access EKS, check cloud credential: %s", failureMessage)
+	}
 	switch phase {
 	case "creating":
 		// set provisioning to unknown
@@ -177,7 +203,7 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 			}
 		}
 
-		e.clusterEnqueueAfter(cluster.Name, 20*time.Second)
+		e.clusterEnqueueAfter(cluster.Name, enqueueTime)
 		if failureMessage == "" {
 			logrus.Infof("waiting for cluster EKS [%s] to finish creating", cluster.Name)
 			return e.setUnknown(cluster, apimgmtv3.ClusterConditionProvisioned, "")
@@ -204,7 +230,7 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 		addNgMessage := "Cannot deploy agent without nodegroups. Add a nodegroup."
 		noNodeGroupsOnSpec := len(cluster.Spec.EKSConfig.NodeGroups) == 0
 		noNodeGroupsOnUpstreamSpec := len(cluster.Status.EKSStatus.UpstreamSpec.NodeGroups) == 0
-		if (cluster.Spec.EKSConfig.NodeGroups != nil && noNodeGroupsOnSpec) || noNodeGroupsOnUpstreamSpec {
+		if (cluster.Spec.EKSConfig.NodeGroups != nil && noNodeGroupsOnSpec) || (cluster.Spec.EKSConfig.NodeGroups == nil && noNodeGroupsOnUpstreamSpec) {
 			cluster, err = e.setFalse(cluster, apimgmtv3.ClusterConditionWaiting, addNgMessage)
 			if err != nil {
 				return cluster, err
@@ -264,13 +290,6 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 			}
 		}
 
-		// check for unauthorized error
-		if failureMessage != "" {
-			if strings.Contains(failureMessage, "403") {
-				return e.setFalse(cluster, apimgmtv3.ClusterConditionUpdated, "cannot access EKS, check cloud credential")
-			}
-		}
-
 		cluster, err = e.recordAppliedSpec(cluster)
 		if err != nil {
 			return cluster, err
@@ -283,7 +302,7 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 			return cluster, err
 		}
 
-		e.clusterEnqueueAfter(cluster.Name, 20*time.Second)
+		e.clusterEnqueueAfter(cluster.Name, enqueueTime)
 		if failureMessage == "" {
 			logrus.Infof("waiting for cluster EKS [%s] to update", cluster.Name)
 			return e.setUnknown(cluster, apimgmtv3.ClusterConditionUpdated, "")
@@ -300,7 +319,8 @@ func (e *eksOperatorController) onClusterChange(key string, cluster *mgmtv3.Clus
 		} else {
 			logrus.Infof("waiting for cluster create [%s] to start", cluster.Name)
 		}
-		e.clusterEnqueueAfter(cluster.Name, 20*time.Second)
+
+		e.clusterEnqueueAfter(cluster.Name, enqueueTime)
 		if failureMessage == "" {
 			if cluster.Spec.EKSConfig.Imported {
 				cluster, err = e.setUnknown(cluster, apimgmtv3.ClusterConditionPending, "")
@@ -329,9 +349,8 @@ func (e *eksOperatorController) setInitialUpstreamSpec(cluster *mgmtv3.Cluster) 
 	return e.clusterClient.Update(cluster)
 }
 
+// updateEKSClusterConfig updates the EKSClusterConfig object's spec with the cluster's EKSConfig if they are not equal..
 func (e *eksOperatorController) updateEKSClusterConfig(cluster *mgmtv3.Cluster, eksClusterConfigDynamic *unstructured.Unstructured, spec map[string]interface{}) (*mgmtv3.Cluster, error) {
-	// configs are not equal, need to update EKS cluster config
-	// getting resource version for watch
 	list, err := e.dynamicClient.Namespace(namespace.GlobalNamespace).List(context.TODO(), v1.ListOptions{})
 	if err != nil {
 		return cluster, err
@@ -360,7 +379,7 @@ func (e *eksOperatorController) updateEKSClusterConfig(cluster *mgmtv3.Cluster, 
 			}
 
 			// this enqueue is necessary to ensure that the controller is reentered with the updating phase
-			e.clusterEnqueueAfter(cluster.Name, 10*time.Second)
+			e.clusterEnqueueAfter(cluster.Name, enqueueTime)
 			return e.setUnknown(cluster, apimgmtv3.ClusterConditionUpdated, "")
 		case <-timeout.C:
 			cluster, err = e.recordAppliedSpec(cluster)
@@ -372,44 +391,57 @@ func (e *eksOperatorController) updateEKSClusterConfig(cluster *mgmtv3.Cluster, 
 	}
 }
 
+// generateAndSetServiceAccount reads the EKSClusterConfig's secret once available and uses its fields to generate a
+// service account token. The token, CA cert, and API endpoint are then copied to the cluster status.
 func (e *eksOperatorController) generateAndSetServiceAccount(cluster *mgmtv3.Cluster) (*mgmtv3.Cluster, error) {
-	// service account token and API endpoint are need to deploy cluster agent, should be able to retrieve
-	// from secret
-	for i := 1; i < 15; i++ {
-		caSecret, err := e.secretsCache.Get(namespace.GlobalNamespace, cluster.Name)
+	backoff := wait.Backoff{
+		Duration: 2 * time.Second,
+		Factor:   2,
+		Jitter:   0,
+		Steps:    6,
+		Cap:      20 * time.Second,
+	}
+
+	var caSecret *corev1.Secret
+	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+		var err error
+		caSecret, err = e.secretsCache.Get(namespace.GlobalNamespace, cluster.Name)
 		if err != nil {
 			if !errors.IsNotFound(err) {
-				return cluster, err
+				return false, err
 			}
 			logrus.Infof("waiting for cluster [%s] data needed to generate service account token", cluster.Name)
-			time.Sleep(20 * time.Second)
-			continue
+			return false, nil
 		}
-
-		// sa token generation can be its own function
-		logrus.Infof("generating service account token for cluster [%s]", cluster.Name)
-		sess, _, err := controller.StartAWSSessions(e.secretsCache, *cluster.Spec.EKSConfig)
-		if err != nil {
-			return cluster, err
-		}
-
-		endpoint := string(caSecret.Data["endpoint"])
-		ca := string(caSecret.Data["ca"])
-		saToken, err := generateSAToken(sess, cluster.Spec.EKSConfig.DisplayName, endpoint, ca)
-		if err != nil {
-			return cluster, err
-		}
-
-		cluster = cluster.DeepCopy()
-		cluster.Status.APIEndpoint = endpoint
-		cluster.Status.CACert = ca
-		cluster.Status.ServiceAccountToken = saToken
-		return e.clusterClient.Update(cluster)
+		return true, nil
+	})
+	if err != nil {
+		return cluster, fmt.Errorf("failed waiting for cluster [%s] secret: %s", cluster.Name, err)
 	}
-	return cluster, fmt.Errorf("failed waiting for cluster [%s] secret", cluster.Name)
+
+	logrus.Infof("generating service account token for cluster [%s]", cluster.Name)
+	sess, _, err := controller.StartAWSSessions(e.secretsCache, *cluster.Spec.EKSConfig)
+	if err != nil {
+		return cluster, err
+	}
+
+	endpoint := string(caSecret.Data["endpoint"])
+	ca := string(caSecret.Data["ca"])
+	saToken, err := generateSAToken(sess, cluster.Spec.EKSConfig.DisplayName, endpoint, ca)
+	if err != nil {
+		return cluster, err
+	}
+
+	cluster = cluster.DeepCopy()
+	cluster.Status.APIEndpoint = endpoint
+	cluster.Status.CACert = ca
+	cluster.Status.ServiceAccountToken = saToken
+	return e.clusterClient.Update(cluster)
 }
 
-func buildEKSCCObject(cluster *mgmtv3.Cluster) (*unstructured.Unstructured, error) {
+// buildEKSCCCreateObject returns an object that can be used with the kubernetes dynamic client to
+// create an EKSClusterConfig that matches the spec contained in the cluster's EKSConfig.
+func buildEKSCCCreateObject(cluster *mgmtv3.Cluster) (*unstructured.Unstructured, error) {
 	eksClusterConfig := eksv1.EKSClusterConfig{
 		TypeMeta: v1.TypeMeta{
 			Kind:       "EKSClusterConfig",
@@ -440,6 +472,7 @@ func buildEKSCCObject(cluster *mgmtv3.Cluster) (*unstructured.Unstructured, erro
 	}, nil
 }
 
+// recordAppliedSpec sets the cluster's current spec as its appliedSpec
 func (e *eksOperatorController) recordAppliedSpec(cluster *mgmtv3.Cluster) (*mgmtv3.Cluster, error) {
 	if reflect.DeepEqual(cluster.Status.AppliedSpec.EKSConfig, cluster.Spec.EKSConfig) {
 		return cluster, nil
@@ -450,13 +483,15 @@ func (e *eksOperatorController) recordAppliedSpec(cluster *mgmtv3.Cluster) (*mgm
 	return e.clusterClient.Update(cluster)
 }
 
+// deployEKSOperator looks for the rancher-eks-operator app in the cattle-system namespace, if not found it is deployed.
+// If it is found but is outdated, the latest version is installed.
 func (e *eksOperatorController) deployEKSOperator() error {
 	template, err := e.templateCache.Get(namespace.GlobalNamespace, eksOperatorTemplate)
 	if err != nil {
 		return err
 	}
 
-	latestTemplateVersion, err := utils.LatestAvailableTemplateVersion(template)
+	latestTemplateVersion, err := e.catalogManager.LatestAvailableTemplateVersion(template, "local")
 	if err != nil {
 		return err
 	}
@@ -465,10 +500,16 @@ func (e *eksOperatorController) deployEKSOperator() error {
 
 	systemProject, err := project.GetSystemProject(localCluster, e.projectCache)
 	if err != nil {
-		panic(err)
+		return err
 	}
+
 	systemProjectID := ref.Ref(systemProject)
 	_, systemProjectName := ref.Parse(systemProjectID)
+
+	valuesYaml, err := generateValuesYaml()
+	if err != nil {
+		return err
+	}
 
 	app, err := e.appLister.Get(systemProjectName, eksOperator)
 	if err != nil {
@@ -502,18 +543,21 @@ func (e *eksOperatorController) deployEKSOperator() error {
 			},
 		}
 
+		desiredApp.Spec.ValuesYaml = valuesYaml
+
 		// k3s upgrader doesn't exist yet, so it will need to be created
 		if _, err = e.appClient.Create(desiredApp); err != nil {
 			return err
 		}
 	} else {
-		if app.Spec.ExternalID == latestVersionID {
+		if app.Spec.ExternalID == latestVersionID && app.Spec.ValuesYaml == valuesYaml {
 			// app is up to date, no action needed
 			return nil
 		}
 		logrus.Info("updating EKS operator in local cluster's system project")
 		desiredApp := app.DeepCopy()
 		desiredApp.Spec.ExternalID = latestVersionID
+		desiredApp.Spec.ValuesYaml = valuesYaml
 		// new version of k3s upgrade available, update app
 		if _, err = e.appClient.Update(desiredApp); err != nil {
 			return err
@@ -608,4 +652,23 @@ func notFound(err error) bool {
 		return awsErr.Code() == eks.ErrCodeResourceNotFoundException
 	}
 	return false
+}
+
+// generateValuesYaml generates a YAML string containing any
+// necessary values to override defaults in values.yaml. If
+// no defaults need to be overwritten, an empty string will
+// be returned.
+func generateValuesYaml() (string, error) {
+	values := eksOperatorValues{
+		HTTPProxy:  os.Getenv("HTTP_PROXY"),
+		HTTPSProxy: os.Getenv("HTTPS_PROXY"),
+		NoProxy:    os.Getenv("NO_PROXY"),
+	}
+
+	valuesYaml, err := yaml.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+
+	return string(valuesYaml), nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/rancher/norman/restwatch"
 	"github.com/rancher/norman/store/proxy"
 	"github.com/rancher/norman/types"
+	"github.com/rancher/rancher/pkg/catalog/manager"
 	apiregistrationv1 "github.com/rancher/rancher/pkg/generated/norman/apiregistration.k8s.io/v1"
 	appsv1 "github.com/rancher/rancher/pkg/generated/norman/apps/v1"
 	autoscaling "github.com/rancher/rancher/pkg/generated/norman/autoscaling/v2beta2"
@@ -61,6 +62,7 @@ type ScaledContext struct {
 	Dialer            dialer.Factory
 	UserManager       user.Manager
 	PeerManager       peermanager.PeerManager
+	CatalogManager    manager.CatalogManager
 
 	Management managementv3.Interface
 	Project    projectv3.Interface
@@ -82,6 +84,7 @@ func (c *ScaledContext) NewManagementContext() (*ManagementContext, error) {
 	}
 	mgmt.Dialer = c.Dialer
 	mgmt.UserManager = c.UserManager
+	mgmt.CatalogManager = c.CatalogManager
 	c.managementContext = mgmt
 	return mgmt, nil
 }
@@ -179,11 +182,13 @@ type ManagementContext struct {
 	Scheme            *runtime.Scheme
 	Dialer            dialer.Factory
 	UserManager       user.Manager
+	CatalogManager    manager.CatalogManager
 
 	Management managementv3.Interface
 	Project    projectv3.Interface
 	RBAC       rbacv1.Interface
 	Core       corev1.Interface
+	Apps       appsv1.Interface
 }
 
 type UserContext struct {
@@ -301,6 +306,10 @@ func newManagementContext(c *ScaledContext) (*ManagementContext, error) {
 	}
 
 	context.Core, err = corev1.NewFromControllerFactory(controllerFactory)
+	if err != nil {
+		return nil, err
+	}
+	context.Apps, err = appsv1.NewFromControllerFactory(controllerFactory)
 	if err != nil {
 		return nil, err
 	}

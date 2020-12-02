@@ -90,11 +90,13 @@ type Context struct {
 	CatalogContentManager *content.Manager
 	HelmOperations        *helmop.Operations
 	SystemChartsManager   *system.Manager
+	Agent                 bool
 }
 
 type MultiClusterManager interface {
 	ClusterDialer(clusterID string) func(ctx context.Context, network, address string) (net.Conn, error)
 	Start(ctx context.Context) error
+	Wait(ctx context.Context)
 	Middleware(next http.Handler) http.Handler
 	K8sClient(clusterName string) (kubernetes.Interface, error)
 }
@@ -133,7 +135,7 @@ func (w *Context) Start(ctx context.Context) error {
 	return nil
 }
 
-func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restConfig *rest.Config) (*Context, error) {
+func NewContext(ctx context.Context, lockID string, clientConfig clientcmd.ClientConfig, restConfig *rest.Config) (*Context, error) {
 	controllerFactory, err := controller.NewSharedControllerFactoryFromConfig(restConfig, Scheme)
 	if err != nil {
 		return nil, err
@@ -184,6 +186,7 @@ func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restCo
 	}
 
 	content := content.NewManager(
+		steveControllers.K8s.Discovery(),
 		steveControllers.Core.ConfigMap().Cache(),
 		steveControllers.Core.Secret().Cache(),
 		helm.Catalog().V1().ClusterRepo().Cache())
@@ -218,7 +221,7 @@ func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restCo
 		MultiClusterManager:   noopMCM{},
 		CachedDiscovery:       cache,
 		RESTMapper:            restMapper,
-		leadership:            leader.NewManager("", "cattle-controllers", steveControllers.K8s),
+		leadership:            leader.NewManager("", lockID, steveControllers.K8s),
 		RESTClientGetter:      restClientGetter,
 		CatalogContentManager: content,
 		HelmOperations:        helmop,
@@ -233,6 +236,9 @@ func (n noopMCM) ClusterDialer(clusterID string) func(ctx context.Context, netwo
 	return func(ctx context.Context, network string, address string) (net.Conn, error) {
 		return nil, fmt.Errorf("no cluster manager")
 	}
+}
+
+func (n noopMCM) Wait(ctx context.Context) {
 }
 
 func (n noopMCM) Start(ctx context.Context) error {
